@@ -22,7 +22,7 @@ embedded-hal-async = { version = "1.0.0" }
 embedded-graphics = "0.8.1"
 dasp = { version = "0.11.0", features = ["all-no-std"]}
 
-#[cfg(target_os = "none")]
+[target.'cfg(target_os = "none")'.dependencies]
 embassy-stm32 = { version = "0.2.0",  features = ["defmt", "stm32h743vi", "time-driver-tim2", "exti", "memory-x", "unstable-pac"]}
 embassy-executor = { version = "0.7.0", features = ["executor-thread", "executor-interrupt", "defmt", "task-arena-size-65536", "arch-cortex-m"]}
 defmt = "1.0.1"

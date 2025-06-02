@@ -1,0 +1,48 @@
+[package]
+name = "loopstation_core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+log = "0.4.27"
+embassy-sync = { version = "0.6.2", features = ["defmt"] }
+embassy-time = { version = "0.4.0", features = ["defmt", "defmt-timestamp-uptime-us", "generic-queue-64"] }
+embassy-usb = { version = "0.4.0", features = ["defmt"] }
+embedded-sdmmc = "0.8.1"
+embassy-embedded-hal = { version = "0.3.0" }
+
+heapless = { version = "0.8.0", default-features = false }
+rand_core = "0.9.0"
+critical-section = "1.2.0"
+micromath = "2.1.0"
+static_cell = "2.1.0"
+i24 = "2.1.0"
+embedded-hal = "1.0.0"
+embedded-hal-async = { version = "1.0.0" }
+embedded-graphics = "0.8.1"
+dasp = { version = "0.11.0", features = ["all-no-std"]}
+
+#[cfg(target_os = "none")]
+embassy-stm32 = { version = "0.2.0",  features = ["defmt", "stm32h743vi", "time-driver-tim2", "exti", "memory-x", "unstable-pac"]}
+embassy-executor = { version = "0.7.0", features = ["executor-thread", "executor-interrupt", "defmt", "task-arena-size-65536", "arch-cortex-m"]}
+defmt = "1.0.1"
+defmt-rtt = "1.0.0"
+panic-probe = { version = "1.0.0", features = ["print-defmt"] }
+cortex-m = { version = "0.7.7", features = ["inline-asm", "critical-section-single-core"] }
+cortex-m-rt = "0.7.5"
+stm32-fmc = "0.4.0"
+embedded-storage = "0.3.1"
+display-interface-i2c = "0.5.0"
+
+usbd-audio = "0.2.0"
+usbd-midi = "0.5.0"
+drive_74hc595 = "0.2.0"
+st7567s = "0.2.1"
+pcf857x-simple = {git = "https://github.com/emeric-martineau/pcf857x-simple-rs"}
+embedded-io-async = { version = "0.6.1" }
+
+
+
+[target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
+env_logger = { version = "0.11.8"}
+embassy-executor = { version = "0.7.0", features = ["executor-thread", "executor-interrupt", "defmt", "arch-std"]}

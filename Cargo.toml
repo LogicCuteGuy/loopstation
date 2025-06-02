@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "loopstation_core",
+    "loopstation_plugin",
+    "xtask",
+]

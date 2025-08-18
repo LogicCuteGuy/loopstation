@@ -13,22 +13,28 @@
 #![allow(unused)]
 
 use crate::audio::AudioEngine;
-use cortex_m;
-use embedded_hal::blocking::i2c::{Write, WriteRead};
 use heapless::Vec;
-use nb;
-use stm32h7xx_hal::{
-    adc::{Adc, AdcSampleTime, Resolution},
-    dac::{self},
-    delay::Delay,
-    dma::{self, MemoryToPeripheral, PeripheralToMemory, traits::TargetAddress},
-    gpio::{self, AF4, AF5, AF6, AF7, Alternate, Analog, Input, Output, Pull, PushPull},
-    i2c::{self, I2c},
-    pac::{self, DMA1, DMA2, I2C1, I2C2, I2C3, Interrupt, interrupt},
-    prelude::*,
-    rcc::{Ccdr, CoreClocks, rec},
-    time::Hertz,
-    timer::Timer,
+
+// Conditional imports for embedded builds only
+#[cfg(feature = "embedded")]
+use {
+    cortex_m,
+    embedded_hal::blocking::i2c::{Write, WriteRead},
+    nb,
+    stm32h7xx_hal::{
+        adc::{Adc, AdcSampleTime, Resolution},
+        dac::{self},
+        delay::Delay,
+        dma::{self, MemoryToPeripheral, PeripheralToMemory, traits::TargetAddress},
+        gpio::{self, AF4, AF5, AF6, AF7, Alternate, Analog, Input, Output, Pull, PushPull},
+        i2c::{self, I2c},
+        pac::{self, DMA1, DMA2, I2C1, I2C2, I2C3, USART1, USART2, USART3, Interrupt, interrupt},
+        prelude::*,
+        rcc::{Ccdr, CoreClocks, rec},
+        serial::{self, Serial},
+        time::Hertz,
+        timer::Timer,
+    },
 };
 
 /// System clock frequency - 400MHz as per requirements
@@ -49,13 +55,15 @@ pub const I2S_OUTPUT_CHANNELS: usize = 8;
 /// DMA buffer size for double buffering (stereo samples per channel)
 pub const DMA_BUFFER_SIZE: usize = AUDIO_BUFFER_SIZE * 2; // Double buffer
 
-/// ADC resolution - 16-bit for STM32H7
+/// ADC resolution - 16-bit for STM32H7 (embedded only)
+#[cfg(feature = "embedded")]
 pub const ADC_RESOLUTION: Resolution = Resolution::SixteenBit;
 
 /// DAC resolution - 12-bit (STM32H7 native)
 pub const DAC_RESOLUTION: u32 = 4096;
 
 /// Hardware abstraction layer for STM32H743VIT6
+#[cfg(feature = "embedded")]
 pub struct HardwareHal {
     /// Core clock control and distribution
     pub ccdr: Ccdr,
@@ -73,10 +81,19 @@ pub struct HardwareHal {
     pub rotary_encoder: Ky040RotaryEncoder,
     /// 74HC595 LED controller for status indication
     pub led_controller: Hc595LedController,
+    /// UART communication with ESP32
+    pub esp32_uart: Esp32UartInterface,
     /// Audio engine for processing
     pub audio_engine: Option<AudioEngine>,
     /// Audio callback active flag
     pub audio_callback_active: bool,
+}
+
+/// Hardware abstraction layer stub for PC builds
+#[cfg(not(feature = "embedded"))]
+pub struct HardwareHal {
+    /// Stub field for PC compatibility
+    pub initialized: bool,
 }
 
 /// I2S Audio Input configuration for PCM1808 ADCs
@@ -106,6 +123,7 @@ pub struct AudioOutput {
 }
 
 /// GPIO controls for buttons using PCF8575 I2C I/O expanders
+#[cfg(not(feature = "std"))]
 pub struct GpioControls {
     /// PCF8575 I/O expanders for button matrix
     pub pcf8575_controllers: Vec<Pcf8575Controller, 4>, // Up to 4 PCF8575 chips
@@ -117,6 +135,13 @@ pub struct GpioControls {
     pub interrupt_pin_active: bool,
     /// Last scan timestamp for 10ms response time
     pub last_scan_time: u32,
+}
+
+/// GPIO controls stub for PC builds
+#[cfg(feature = "std")]
+pub struct GpioControls {
+    /// Stub field for PC compatibility
+    pub initialized: bool,
 }
 
 /// PCF8575 I2C I/O Expander Controller
@@ -302,6 +327,114 @@ pub enum LedCommand {
     Brightness(u8),
 }
 
+/// UART interface for ESP32 communication
+#[cfg(not(feature = "std"))]
+pub struct Esp32UartInterface {
+    /// UART peripheral for communication
+    pub uart: Option<Serial<USART1>>,
+    /// Message buffer for incoming data
+    pub rx_buffer: heapless::Vec<u8, 512>,
+    /// Message buffer for outgoing data
+    pub tx_buffer: heapless::Vec<u8, 512>,
+    /// Last communication timestamp
+    pub last_communication: u32,
+    /// Communication error count
+    pub error_count: u32,
+    /// Interface enabled flag
+    pub enabled: bool,
+}
+
+/// UART interface stub for PC builds
+#[cfg(feature = "std")]
+pub struct Esp32UartInterface {
+    /// Message buffer for incoming data
+    pub rx_buffer: heapless::Vec<u8, 512>,
+    /// Message buffer for outgoing data
+    pub tx_buffer: heapless::Vec<u8, 512>,
+    /// Last communication timestamp
+    pub last_communication: u32,
+    /// Communication error count
+    pub error_count: u32,
+    /// Interface enabled flag
+    pub enabled: bool,
+}
+
+/// Communication message types between STM32 and ESP32
+#[derive(Debug, Clone)]
+pub enum Esp32Message {
+    /// System status update to ESP32
+    StatusUpdate {
+        tracks: [TrackStatus; 6],
+        tempo: f32,
+        current_memory: u8,
+        fx_states: [bool; 5],
+    },
+    /// Parameter change notification to ESP32
+    ParameterChange {
+        parameter: ParameterId,
+        value: f32,
+    },
+    /// Command from ESP32 to STM32
+    Command {
+        command: CommandType,
+        track_id: Option<u8>,
+        value: Option<f32>,
+    },
+    /// Response to ESP32 command
+    Response {
+        success: bool,
+        error_message: Option<heapless::String<64>>,
+    },
+    /// Heartbeat message
+    Heartbeat,
+}
+
+/// Track status for communication
+#[derive(Debug, Clone, Copy)]
+pub struct TrackStatus {
+    pub state: TrackStateComm,
+    pub volume: f32,
+    pub pan: f32,
+    pub muted: bool,
+    pub selected: bool,
+}
+
+/// Track state for communication
+#[derive(Debug, Clone, Copy)]
+pub enum TrackStateComm {
+    Stopped,
+    Recording,
+    Playing,
+    Overdubbing,
+    Muted,
+}
+
+/// Parameter identifiers for communication
+#[derive(Debug, Clone, Copy)]
+pub enum ParameterId {
+    TrackVolume(u8),
+    TrackPan(u8),
+    MasterVolume,
+    Tempo,
+    FxParameter { fx_id: u8, param_id: u8 },
+}
+
+/// Command types from ESP32
+#[derive(Debug, Clone, Copy)]
+pub enum CommandType {
+    TrackPlay,
+    TrackStop,
+    TrackRecord,
+    TrackClear,
+    TrackMute,
+    SetVolume,
+    SetTempo,
+    FxToggle,
+    MemoryLoad,
+    MemorySave,
+}
+
+#[cfg(not(feature = "std"))]
 impl HardwareHal {
     /// Initialize the hardware abstraction layer with I2S audio interface
     ///
@@ -356,6 +489,9 @@ impl HardwareHal {
         // Initialize 74HC595 LED controller
         let led_controller = Self::init_led_controller(&mut ccdr)?;
 
+        // Initialize ESP32 UART interface
+        let esp32_uart = Self::init_esp32_uart(&mut ccdr, dp.USART1)?;
+
         // Create audio engine
         let audio_engine = Some(AudioEngine::new(SAMPLE_RATE_HZ, AUDIO_BUFFER_SIZE));
 
@@ -368,6 +504,7 @@ impl HardwareHal {
             control_adc,
             rotary_encoder,
             led_controller,
+            esp32_uart,
             audio_engine,
             audio_callback_active: false,
         })
@@ -829,6 +966,254 @@ impl HardwareHal {
         Ok(())
     }
 
+    /// Initialize ESP32 UART interface at 115200 baud
+    fn init_esp32_uart(ccdr: &mut Ccdr, usart1: USART1) -> Result<Esp32UartInterface, HalError> {
+        // TODO: Configure GPIO pins for UART1 when HAL API is confirmed
+        // This would include:
+        // - PA9 = USART1_TX (AF7) to ESP32 RX
+        // - PA10 = USART1_RX (AF7) from ESP32 TX
+        
+        // For now, create the interface structure without actual UART initialization
+        // Full implementation will be completed when GPIO configuration is available
+        
+        Ok(Esp32UartInterface {
+            uart: None, // Will be initialized when GPIO API is available
+            rx_buffer: heapless::Vec::new(),
+            tx_buffer: heapless::Vec::new(),
+            last_communication: 0,
+            error_count: 0,
+            enabled: true,
+        })
+    }
+
+    /// Send message to ESP32 via UART
+    pub fn send_to_esp32(&mut self, message: &Esp32Message) -> Result<(), HalError> {
+        if !self.esp32_uart.enabled {
+            return Err(HalError::CommunicationError);
+        }
+
+        // Serialize message to JSON format
+        let json_str = self.serialize_message(message)?;
+        
+        // Add newline delimiter
+        let mut full_message = heapless::String::<512>::new();
+        full_message.push_str(&json_str).map_err(|_| HalError::BufferFull)?;
+        full_message.push('\n').map_err(|_| HalError::BufferFull)?;
+
+        // Store in TX buffer for now (actual UART transmission will be implemented later)
+        self.esp32_uart.tx_buffer.clear();
+        for byte in full_message.as_bytes() {
+            self.esp32_uart.tx_buffer.push(*byte).map_err(|_| HalError::BufferFull)?;
+        }
+
+        // TODO: Actual UART transmission when peripheral is available
+        // if let Some(ref mut uart) = self.esp32_uart.uart {
+        //     for byte in &self.esp32_uart.tx_buffer {
+        //         nb::block!(uart.write(*byte)).map_err(|_| HalError::CommunicationError)?;
+        //     }
+        // }
+
+        Ok(())
+    }
+
+    /// Receive message from ESP32 via UART
+    pub fn receive_from_esp32(&mut self) -> Result<Option<Esp32Message>, HalError> {
+        if !self.esp32_uart.enabled {
+            return Ok(None);
+        }
+
+        // TODO: Actual UART reception when peripheral is available
+        // For now, return None (no message received)
+        
+        // The implementation would:
+        // 1. Read bytes from UART into rx_buffer
+        // 2. Look for newline delimiter
+        // 3. Parse JSON message
+        // 4. Return parsed message
+
+        Ok(None)
+    }
+
+    /// Send system status update to ESP32
+    pub fn send_status_update(&mut self) -> Result<(), HalError> {
+        // Collect current system status
+        let mut tracks = [TrackStatus {
+            state: TrackStateComm::Stopped,
+            volume: 1.0,
+            pan: 0.0,
+            muted: false,
+            selected: false,
+        }; 6];
+
+        // Get track states from audio engine if available
+        if let Some(ref audio_engine) = self.audio_engine {
+            for i in 0..6 {
+                // TODO: Get actual track state from audio engine
+                // For now, use placeholder values
+                tracks[i] = TrackStatus {
+                    state: if i == 0 { TrackStateComm::Playing } else { TrackStateComm::Stopped },
+                    volume: 0.8,
+                    pan: 0.0,
+                    muted: false,
+                    selected: i == 0,
+                };
+            }
+        }
+
+        let message = Esp32Message::StatusUpdate {
+            tracks,
+            tempo: 120.0, // TODO: Get from actual tempo system
+            current_memory: 1, // TODO: Get from memory system
+            fx_states: [false, true, false, false, false], // TODO: Get from FX system
+        };
+
+        self.send_to_esp32(&message)
+    }
+
+    /// Send parameter change notification to ESP32
+    pub fn send_parameter_change(&mut self, parameter: ParameterId, value: f32) -> Result<(), HalError> {
+        let message = Esp32Message::ParameterChange { parameter, value };
+        self.send_to_esp32(&message)
+    }
+
+    /// Process received command from ESP32
+    pub fn process_esp32_command(&mut self, message: Esp32Message) -> Result<(), HalError> {
+        match message {
+            Esp32Message::Command { command, track_id, value } => {
+                let result = self.execute_command(command, track_id, value);
+                
+                // Send response back to ESP32
+                let response = match &result {
+                    Ok(()) => Esp32Message::Response { success: true, error_message: None },
+                    Err(_) => {
+                        let mut error_msg = heapless::String::new();
+                        error_msg.push_str("Command failed").ok();
+                        Esp32Message::Response { success: false, error_message: Some(error_msg) }
+                    }
+                };
+                
+                self.send_to_esp32(&response)?;
+                result
+            }
+            Esp32Message::Heartbeat => {
+                // Respond to heartbeat
+                self.send_to_esp32(&Esp32Message::Heartbeat)
+            }
+            _ => Ok(()), // Other message types handled elsewhere
+        }
+    }
+
+    /// Execute command received from ESP32
+    fn execute_command(&mut self, command: CommandType, track_id: Option<u8>, value: Option<f32>) -> Result<(), HalError> {
+        match command {
+            CommandType::TrackPlay => {
+                if let Some(id) = track_id {
+                    // TODO: Implement track play via audio engine
+                    // self.audio_engine.as_mut().unwrap().start_playback(id)?;
+                }
+            }
+            CommandType::TrackStop => {
+                if let Some(id) = track_id {
+                    // TODO: Implement track stop via audio engine
+                    // self.audio_engine.as_mut().unwrap().stop_track(id)?;
+                }
+            }
+            CommandType::TrackRecord => {
+                if let Some(id) = track_id {
+                    // TODO: Implement track record via audio engine
+                    // self.audio_engine.as_mut().unwrap().start_recording(id)?;
+                }
+            }
+            CommandType::SetVolume => {
+                if let (Some(id), Some(vol)) = (track_id, value) {
+                    // TODO: Implement volume setting via audio engine
+                    // self.audio_engine.as_mut().unwrap().set_track_level(id, vol)?;
+                }
+            }
+            CommandType::SetTempo => {
+                if let Some(tempo) = value {
+                    // TODO: Implement tempo setting
+                    // self.tempo = tempo;
+                }
+            }
+            _ => {
+                // Other commands will be implemented in later tasks
+            }
+        }
+        Ok(())
+    }
+
+    /// Serialize message to JSON string
+    fn serialize_message(&self, message: &Esp32Message) -> Result<heapless::String<256>, HalError> {
+        let mut json_str = heapless::String::new();
+        
+        // Simple JSON serialization (basic implementation)
+        match message {
+            Esp32Message::StatusUpdate { tracks, tempo, current_memory, fx_states } => {
+                json_str.push_str("{\"type\":\"status\",\"tracks\":[").map_err(|_| HalError::BufferFull)?;
+                for (i, track) in tracks.iter().enumerate() {
+                    if i > 0 { json_str.push(',').map_err(|_| HalError::BufferFull)?; }
+                    json_str.push_str("{\"state\":").map_err(|_| HalError::BufferFull)?;
+                    match track.state {
+                        TrackStateComm::Stopped => json_str.push_str("0").map_err(|_| HalError::BufferFull)?,
+                        TrackStateComm::Recording => json_str.push_str("1").map_err(|_| HalError::BufferFull)?,
+                        TrackStateComm::Playing => json_str.push_str("2").map_err(|_| HalError::BufferFull)?,
+                        TrackStateComm::Overdubbing => json_str.push_str("3").map_err(|_| HalError::BufferFull)?,
+                        TrackStateComm::Muted => json_str.push_str("4").map_err(|_| HalError::BufferFull)?,
+                    }
+                    json_str.push_str(",\"volume\":").map_err(|_| HalError::BufferFull)?;
+                    // Simple float to string conversion (basic implementation)
+                    let vol_str = if track.volume >= 1.0 { "1.0" } else if track.volume <= 0.0 { "0.0" } else { "0.5" };
+                    json_str.push_str(vol_str).map_err(|_| HalError::BufferFull)?;
+                    json_str.push('}').map_err(|_| HalError::BufferFull)?;
+                }
+                json_str.push_str("],\"tempo\":").map_err(|_| HalError::BufferFull)?;
+                json_str.push_str("120.0").map_err(|_| HalError::BufferFull)?; // Simplified
+                json_str.push('}').map_err(|_| HalError::BufferFull)?;
+            }
+            Esp32Message::Heartbeat => {
+                json_str.push_str("{\"type\":\"heartbeat\"}").map_err(|_| HalError::BufferFull)?;
+            }
+            Esp32Message::Response { success, error_message } => {
+                json_str.push_str("{\"type\":\"response\",\"success\":").map_err(|_| HalError::BufferFull)?;
+                if *success { json_str.push_str("true").map_err(|_| HalError::BufferFull)?; }
+                else { json_str.push_str("false").map_err(|_| HalError::BufferFull)?; }
+                json_str.push('}').map_err(|_| HalError::BufferFull)?;
+            }
+            _ => {
+                json_str.push_str("{\"type\":\"unknown\"}").map_err(|_| HalError::BufferFull)?;
+            }
+        }
+        
+        Ok(json_str)
+    }
+
+    /// Update ESP32 communication (called from main loop)
+    pub fn update_esp32_communication(&mut self, timestamp: u32) -> Result<(), HalError> {
+        // Send periodic status updates (every 100ms)
+        if timestamp.saturating_sub(self.esp32_uart.last_communication) >= 100 {
+            self.send_status_update()?;
+            self.esp32_uart.last_communication = timestamp;
+        }
+
+        // Check for incoming messages
+        if let Some(message) = self.receive_from_esp32()? {
+            self.process_esp32_command(message)?;
+        }
+
+        Ok(())
+    }
+
+    /// Get ESP32 communication statistics
+    pub fn get_esp32_stats(&self) -> (u32, bool) {
+        (self.esp32_uart.error_count, self.esp32_uart.enabled)
+    }
+
+    /// Enable/disable ESP32 communication
+    pub fn set_esp32_enabled(&mut self, enabled: bool) {
+        self.esp32_uart.enabled = enabled;
+    }
+
     /// Configure GPIO pins for I2S communication
     fn configure_i2s_gpio(&mut self) -> Result<(), HalError> {
         // TODO: Configure GPIO pins for SAI1-4 I2S communication
@@ -841,8 +1226,223 @@ impl HardwareHal {
 
         Ok(())
     }
+
+    /// Get MIDI events from UART interface
+    pub fn get_midi_events(&mut self) -> Vec<MidiEvent, 16> {
+        let mut events = Vec::new();
+        
+        // TODO: Read MIDI data from UART and parse into MidiEvent
+        // This would involve:
+        // 1. Reading bytes from MIDI UART interface
+        // 2. Parsing MIDI protocol (status bytes, data bytes)
+        // 3. Converting to MidiEvent enum
+        // For now, return empty vector
+        
+        events
+    }
+
+    /// Get footswitch events from GPIO
+    pub fn get_footswitch_events(&mut self) -> Vec<(usize, bool), 4> {
+        let mut events = Vec::new();
+        
+        // TODO: Read footswitch GPIO pins and detect state changes
+        // This would involve:
+        // 1. Reading GPIO pins connected to footswitches
+        // 2. Debouncing and edge detection
+        // 3. Returning (footswitch_index, pressed) pairs
+        // For now, return empty vector
+        
+        events
+    }
 }
 
+// PC implementation with stubs
+#[cfg(feature = "std")]
+impl HardwareHal {
+    /// Initialize the hardware abstraction layer (PC stub)
+    pub fn init() -> Result<Self, HalError> {
+        Ok(Self {
+            initialized: true,
+        })
+    }
+
+    /// Start audio processing (PC stub)
+    pub fn start_audio_processing(&mut self) -> Result<(), HalError> {
+        Ok(())
+    }
+
+    /// Stop audio processing (PC stub)
+    pub fn stop_audio_processing(&mut self) -> Result<(), HalError> {
+        Ok(())
+    }
+
+    /// Read control values (PC stub)
+    pub fn read_controls(&mut self) -> Vec<(ControlId, f32), 16> {
+        Vec::new()
+    }
+
+    /// Read button states (PC stub)
+    pub fn read_buttons(&mut self) -> Vec<(ButtonId, PressType), 32> {
+        Vec::new()
+    }
+
+    /// Set LED state (PC stub)
+    pub fn set_led(&mut self, _led: LedId, _command: LedCommand) -> Result<(), HalError> {
+        Ok(())
+    }
+
+    /// Send UART data to ESP32 (PC stub)
+    pub fn send_uart_data(&mut self, _data: &[u8]) -> Result<(), HalError> {
+        Ok(())
+    }
+
+    /// Read UART data from ESP32 (PC stub)
+    pub fn read_uart_data(&mut self) -> Result<Vec<u8, 256>, HalError> {
+        Ok(Vec::new())
+    }
+
+    /// Update LEDs (PC stub)
+    pub fn update_leds(&mut self) -> Result<(), HalError> {
+        Ok(())
+    }
+
+    /// Update button states (PC stub)
+    pub fn update_button_states(&mut self, _time_ms: u32) -> Vec<(ButtonId, PressType), 32> {
+        Vec::new()
+    }
+
+    /// Update rotary encoder (PC stub)
+    pub fn update_rotary_encoder(&mut self, _time_ms: u32) -> Vec<RotaryEvent, 8> {
+        Vec::new()
+    }
+
+    /// Read single control (PC stub)
+    pub fn read_control(&mut self, _control_id: ControlId) -> Result<f32, HalError> {
+        Ok(0.0)
+    }
+
+    /// Get MIDI events (PC stub)
+    pub fn get_midi_events(&mut self) -> Vec<MidiEvent, 16> {
+        Vec::new()
+    }
+
+    /// Get footswitch events (PC stub)
+    pub fn get_footswitch_events(&mut self) -> Vec<(usize, bool), 4> {
+        Vec::new()
+    }
+}
+
+// PC stub implementations for other types
+#[cfg(feature = "std")]
+impl Ky040RotaryEncoder {
+    pub fn new() -> Self {
+        Self {
+            clk_pin: None,
+            dt_pin: None,
+            sw_pin: None,
+            prev_clk_state: false,
+            prev_dt_state: false,
+            prev_button_state: false,
+            position: 0,
+            button_pressed: false,
+            button_debounce_counter: 0,
+            last_update_time: 0,
+            enabled: false,
+        }
+    }
+
+    pub fn read_events(&mut self) -> Vec<RotaryEvent, 8> {
+        Vec::new()
+    }
+
+    pub fn get_position(&self) -> i32 {
+        self.position
+    }
+
+    pub fn reset_position(&mut self) {
+        self.position = 0;
+    }
+
+    pub fn is_button_pressed(&self) -> bool {
+        self.button_pressed
+    }
+
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+    }
+}
+
+#[cfg(feature = "std")]
+impl Hc595LedController {
+    pub fn new(chip_count: u8) -> Self {
+        Self {
+            spi_peripheral: None,
+            data_pin: None,
+            clock_pin: None,
+            latch_pin: None,
+            output_enable_pin: None,
+            chip_count,
+            led_states: [0; 8],
+            update_pending: false,
+            enabled: false,
+        }
+    }
+
+    pub fn set_led(&mut self, _led: LedId, _command: LedCommand) -> Result<(), HalError> {
+        Ok(())
+    }
+
+    pub fn update_leds(&mut self) -> Result<(), HalError> {
+        Ok(())
+    }
+
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+    }
+}
+
+#[cfg(feature = "std")]
+impl Esp32UartInterface {
+    pub fn new() -> Self {
+        Self {
+            rx_buffer: heapless::Vec::new(),
+            tx_buffer: heapless::Vec::new(),
+            last_communication: 0,
+            error_count: 0,
+            enabled: false,
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl Pcf8575Controller {
+    pub fn new(address: u8, controller_type: ControllerType) -> Self {
+        Self {
+            address,
+            current_state: 0xFFFF,
+            previous_state: 0xFFFF,
+            button_mapping: ButtonMapping::new(controller_type),
+            debounce_counters: [0; 16],
+            press_start_times: [0; 16],
+            press_types: [PressType::None; 16],
+            enabled: false,
+        }
+    }
+
+    pub fn read_buttons<I2C>(&mut self, _i2c: &mut I2C, _time_ms: u32) -> Vec<(ButtonId, PressType), 16> {
+        Vec::new()
+    }
+
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+    }
+
+    pub fn is_interrupt_active(&self) -> bool {
+        false
+    }
+}
+
+#[cfg(not(feature = "std"))]
 impl Ky040RotaryEncoder {
     /// Create a new KY-040 rotary encoder driver
     pub fn new() -> Self {
@@ -971,6 +1571,7 @@ impl Ky040RotaryEncoder {
     }
 }
 
+#[cfg(not(feature = "std"))]
 impl Hc595LedController {
     /// Create a new 74HC595 LED controller
     pub fn new(chip_count: u8) -> Self {
@@ -1157,6 +1758,21 @@ impl Hc595LedController {
     }
 }
 
+#[cfg(not(feature = "std"))]
+impl Esp32UartInterface {
+    pub fn new() -> Self {
+        Self {
+            uart: None,
+            rx_buffer: heapless::Vec::new(),
+            tx_buffer: heapless::Vec::new(),
+            last_communication: 0,
+            error_count: 0,
+            enabled: true,
+        }
+    }
+}
+
+#[cfg(not(feature = "std"))]
 impl Pcf8575Controller {
     /// Create a new PCF8575 controller
     pub fn new(address: u8, controller_type: ControllerType) -> Self {
@@ -1505,6 +2121,15 @@ pub enum ButtonId {
     Edit,
 }
 
+/// MIDI event types
+#[derive(Debug, Clone, Copy)]
+pub enum MidiEvent {
+    NoteOn { channel: u8, note: u8, velocity: u8 },
+    NoteOff { channel: u8, note: u8, velocity: u8 },
+    ControlChange { channel: u8, controller: u8, value: u8 },
+    ProgramChange { channel: u8, program: u8 },
+}
+
 /// HAL error types
 #[derive(Debug)]
 pub enum HalError {
@@ -1525,55 +2150,92 @@ pub enum HalError {
     InitError,
     ButtonMatrixError,
     ControllerNotFound,
+    CommunicationError,
+    BufferFull,
+    ParseError,
+    SerializationError,
 }
 
-use core::cell::RefCell;
-use cortex_m::interrupt::{self as cm_interrupt, Mutex};
+// Embedded-specific implementations
+#[cfg(not(feature = "std"))]
+mod embedded_impl {
+    use super::*;
+    use core::cell::RefCell;
+    use cortex_m::interrupt::{self as cm_interrupt, Mutex};
 
-// Global static variables for interrupt handling (simplified to avoid large allocations)
-static AUDIO_CALLBACK_ACTIVE: Mutex<RefCell<bool>> = Mutex::new(RefCell::new(false));
+    // Global static variables for interrupt handling (simplified to avoid large allocations)
+    static AUDIO_CALLBACK_ACTIVE: Mutex<RefCell<bool>> = Mutex::new(RefCell::new(false));
 
-/// Initialize global HAL state for interrupt access
-pub fn init_global_hal() -> Result<HardwareHal, HalError> {
-    // Return HAL instance instead of storing globally
-    HardwareHal::init()
-}
+    /// Initialize global HAL state for interrupt access
+    pub fn init_global_hal() -> Result<HardwareHal, HalError> {
+        // Return HAL instance instead of storing globally
+        HardwareHal::init()
+    }
 
-/// Set audio callback active state (for interrupt handlers)
-pub fn set_audio_callback_active(active: bool) {
-    cm_interrupt::free(|cs| {
-        *AUDIO_CALLBACK_ACTIVE.borrow(cs).borrow_mut() = active;
-    });
-}
+    /// Set audio callback active state (for interrupt handlers)
+    pub fn set_audio_callback_active(active: bool) {
+        cm_interrupt::free(|cs| {
+            *AUDIO_CALLBACK_ACTIVE.borrow(cs).borrow_mut() = active;
+        });
+    }
 
-/// Check if audio callback is active (for interrupt handlers)
-pub fn is_audio_callback_active() -> bool {
-    cm_interrupt::free(|cs| *AUDIO_CALLBACK_ACTIVE.borrow(cs).borrow())
-}
+    /// Check if audio callback is active (for interrupt handlers)
+    pub fn is_audio_callback_active() -> bool {
+        cm_interrupt::free(|cs| *AUDIO_CALLBACK_ACTIVE.borrow(cs).borrow())
+    }
 
-/// DMA interrupt handler for audio input (SAI1/SAI2)
-#[interrupt]
-fn DMA1_STR0() {
-    if is_audio_callback_active() {
-        // Handle SAI1 DMA completion
-        // TODO: Process audio input DMA completion
+    /// DMA interrupt handler for audio input (SAI1/SAI2)
+    #[interrupt]
+    fn DMA1_STR0() {
+        if is_audio_callback_active() {
+            // Handle SAI1 DMA completion
+            // TODO: Process audio input DMA completion
+        }
+    }
+
+    /// DMA interrupt handler for audio output (SAI3/SAI4)
+    #[interrupt]
+    fn DMA2_STR0() {
+        if is_audio_callback_active() {
+            // Handle SAI3 DMA completion
+            // TODO: Process audio output DMA completion
+        }
+    }
+
+    /// Timer interrupt for audio processing timing
+    #[interrupt]
+    fn TIM2() {
+        if is_audio_callback_active() {
+            // Process audio callback at regular intervals
+            // TODO: Trigger audio processing
+        }
     }
 }
 
-/// DMA interrupt handler for audio output (SAI3/SAI4)
-#[interrupt]
-fn DMA2_STR0() {
-    if is_audio_callback_active() {
-        // Handle SAI3 DMA completion
-        // TODO: Process audio output DMA completion
+// PC-specific stub implementations
+#[cfg(feature = "std")]
+mod pc_impl {
+    use super::*;
+
+    /// Initialize global HAL state for PC builds (stub)
+    pub fn init_global_hal() -> Result<HardwareHal, HalError> {
+        HardwareHal::init()
+    }
+
+    /// Set audio callback active state (stub for PC)
+    pub fn set_audio_callback_active(_active: bool) {
+        // No-op for PC builds
+    }
+
+    /// Check if audio callback is active (stub for PC)
+    pub fn is_audio_callback_active() -> bool {
+        true // Always active for PC builds
     }
 }
 
-/// Timer interrupt for audio processing timing
-#[interrupt]
-fn TIM2() {
-    if is_audio_callback_active() {
-        // Process audio callback at regular intervals
-        // TODO: Trigger audio processing
-    }
-}
+// Re-export the appropriate implementation
+#[cfg(not(feature = "std"))]
+pub use embedded_impl::*;
+
+#[cfg(feature = "std")]
+pub use pc_impl::*;

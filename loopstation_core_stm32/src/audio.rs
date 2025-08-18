@@ -1,5 +1,6 @@
 use heapless::Vec;
 use serde::{Deserialize, Serialize};
+use crate::effects::EffectChain;
 
 /// Maximum audio buffer size per track (1.5 hours at 44.1kHz stereo)
 /// 1.5 hours * 60 min/hour * 60 sec/min * 44100 samples/sec * 2 channels
@@ -187,6 +188,8 @@ pub struct Track {
     pub undo_buffer: Vec<AudioSnapshot, 32>, // Max 32 undo levels
     /// Whether track is selected for editing
     pub selected: bool,
+    /// Track-specific effects chain (post-recording processing)
+    pub track_fx: EffectChain,
 }
 
 impl Track {
@@ -207,6 +210,7 @@ impl Track {
             fade_settings: FadeSettings::default(),
             undo_buffer: Vec::new(),
             selected: false,
+            track_fx: EffectChain::new_track_fx(),
         }
     }
 
@@ -215,6 +219,17 @@ impl Track {
         self.state.transition(TrackAction::RecordPlay);
         if self.state == TrackState::Recording {
             self.record_position = 0;
+        }
+    }
+
+    /// Start playback on this track
+    pub fn start_playback(&mut self) {
+        // Only start playback if track has content
+        if self.loop_length > 0 {
+            self.state.transition(TrackAction::RecordPlay);
+            if self.state == TrackState::Playing {
+                self.play_position = 0;
+            }
         }
     }
 
@@ -227,6 +242,18 @@ impl Track {
     /// Toggle mute state
     pub fn toggle_mute(&mut self) {
         self.state.transition(TrackAction::Mute);
+    }
+
+    /// Undo last action on this track (placeholder)
+    pub fn undo_last_action(&mut self) {
+        // Placeholder for undo system implementation
+        // This would restore the previous state from undo buffer
+    }
+
+    /// Redo last undone action on this track (placeholder)
+    pub fn redo_last_action(&mut self) {
+        // Placeholder for redo system implementation
+        // This would restore the next state from redo buffer
     }
 
     /// Clear track content
@@ -276,24 +303,31 @@ impl Track {
     pub fn process_audio(&mut self, input: &[f32], output: &mut [f32], sample_rate: u32) {
         let buffer_len = input.len().min(output.len());
         
+        // Temporary buffer for track processing before effects
+        let mut temp_buffer = [0.0f32; 512]; // Max buffer size for embedded
+        let temp_len = buffer_len.min(512);
+        
         match self.state {
             TrackState::Recording => {
                 self.record_audio(input, buffer_len);
-                // During recording, pass input to output for monitoring
-                output[..buffer_len].copy_from_slice(&input[..buffer_len]);
+                // During recording, pass input to temp buffer for monitoring
+                temp_buffer[..temp_len].copy_from_slice(&input[..temp_len]);
             },
             TrackState::Playing => {
-                self.playback_audio(output, buffer_len);
+                self.playback_audio(&mut temp_buffer[..temp_len], temp_len);
             },
             TrackState::Overdubbing => {
                 self.record_audio(input, buffer_len);
-                self.playback_audio(output, buffer_len);
+                self.playback_audio(&mut temp_buffer[..temp_len], temp_len);
             },
             TrackState::Stopped | TrackState::Muted => {
                 // Output silence
-                output[..buffer_len].fill(0.0);
+                temp_buffer[..temp_len].fill(0.0);
             },
         }
+
+        // Process through Track FX chain
+        self.track_fx.process_audio(&temp_buffer[..temp_len], &mut output[..temp_len], sample_rate as f32);
     }
 
     /// Record audio into the track buffer
@@ -385,6 +419,10 @@ pub struct AudioEngine {
     pub callback_active: bool,
     /// Processing statistics
     pub stats: AudioStats,
+    /// Input effects chain (pre-recording)
+    pub input_fx: EffectChain,
+    /// Master effects chain (final output)
+    pub master_fx: EffectChain,
 }
 
 /// Audio processing statistics
@@ -413,6 +451,8 @@ impl AudioEngine {
             master_level: 1.0,
             callback_active: false,
             stats: AudioStats::default(),
+            input_fx: EffectChain::new_input_fx(),
+            master_fx: EffectChain::new_master_fx(),
         }
     }
 
@@ -428,6 +468,11 @@ impl AudioEngine {
 
     /// Main audio processing callback - processes all 6 tracks
     /// This is called from the DMA interrupt at 44.1kHz
+    /// 
+    /// This method now implements the 3-layer FX architecture:
+    /// 1. Input FX - applied to input before recording
+    /// 2. Track FX - applied to individual track playback (handled in Track::process_audio)
+    /// 3. Master FX - applied to final mixed output
     pub fn process_callback(&mut self, input_buffer: &[f32], output_buffer: &mut [f32]) {
         if !self.callback_active {
             output_buffer.fill(0.0);
@@ -439,30 +484,50 @@ impl AudioEngine {
         // Clear output buffer
         output_buffer[..buffer_len].fill(0.0);
         
-        // Temporary buffer for track processing
-        let mut track_output = [0.0f32; 512]; // Max buffer size
-        let track_buffer_len = buffer_len.min(track_output.len());
+        // Temporary buffers for processing
+        let mut processed_input = [0.0f32; 512]; // Input after Input FX
+        let mut track_output = [0.0f32; 512]; // Individual track output
+        let mut mixed_output = [0.0f32; 512]; // Mixed tracks before Master FX
+        let buffer_size = buffer_len.min(512);
+        
+        // Clear buffers
+        processed_input[..buffer_size].fill(0.0);
+        mixed_output[..buffer_size].fill(0.0);
         
         // Process each track
         for track in &mut self.tracks {
             if track.state.is_active() {
                 // Clear track output buffer
-                track_output[..track_buffer_len].fill(0.0);
+                track_output[..buffer_size].fill(0.0);
                 
-                // Process this track
-                track.process_audio(input_buffer, &mut track_output[..track_buffer_len], self.sample_rate);
+                // For recording tracks, apply Input FX to the input signal first
+                let track_input = if track.state.is_recording() {
+                    // Apply Input FX to input signal (affects recorded audio)
+                    // Input FX is shared across all recording tracks
+                    self.input_fx.process_audio(&input_buffer[..buffer_size], &mut processed_input[..buffer_size], self.sample_rate as f32);
+                    &processed_input[..buffer_size]
+                } else {
+                    // For playback-only tracks, use original input
+                    &input_buffer[..buffer_size]
+                };
                 
-                // Mix track output into main output buffer
-                for i in 0..track_buffer_len {
-                    output_buffer[i] += track_output[i];
+                // Process this track (includes Track FX processing)
+                track.process_audio(track_input, &mut track_output[..buffer_size], self.sample_rate);
+                
+                // Mix track output into main mix
+                for i in 0..buffer_size {
+                    mixed_output[i] += track_output[i];
                 }
             }
         }
 
-        // Apply master volume
-        for sample in &mut output_buffer[..buffer_len] {
+        // Apply master volume to mixed output
+        for sample in &mut mixed_output[..buffer_size] {
             *sample *= self.master_level;
         }
+
+        // Apply Master FX to final mixed output
+        self.master_fx.process_audio(&mixed_output[..buffer_size], &mut output_buffer[..buffer_size], self.sample_rate as f32);
 
         // Update statistics
         self.stats.samples_processed += buffer_len as u64;
@@ -490,6 +555,16 @@ impl AudioEngine {
     pub fn start_recording(&mut self, track_id: u8) -> Result<(), AudioError> {
         if let Some(track) = self.get_track_mut(track_id) {
             track.start_recording();
+            Ok(())
+        } else {
+            Err(AudioError::InvalidTrack)
+        }
+    }
+
+    /// Start playback on a track
+    pub fn start_playback(&mut self, track_id: u8) -> Result<(), AudioError> {
+        if let Some(track) = self.get_track_mut(track_id) {
+            track.start_playback();
             Ok(())
         } else {
             Err(AudioError::InvalidTrack)
@@ -566,11 +641,75 @@ impl AudioEngine {
         self.tracks.iter().any(|track| track.state.is_playing())
     }
 
+    /// Update audio engine state (called from main loop)
+    pub fn update(&mut self) {
+        // Update track states, handle tempo changes, etc.
+        for track in &mut self.tracks {
+            // Update track-specific state if needed
+        }
+        
+        // Update effect chains
+        self.input_fx.update();
+        self.master_fx.update();
+        
+        for track in &mut self.tracks {
+            track.track_fx.update();
+        }
+    }
+
     /// Get total recording time across all tracks
     pub fn total_recording_time(&self) -> f32 {
         self.tracks.iter()
             .map(|track| track.duration_seconds(self.sample_rate))
             .sum()
+    }
+
+    /// Get input effects chain
+    pub fn input_fx(&self) -> &EffectChain {
+        &self.input_fx
+    }
+
+    /// Get mutable input effects chain
+    pub fn input_fx_mut(&mut self) -> &mut EffectChain {
+        &mut self.input_fx
+    }
+
+    /// Get master effects chain
+    pub fn master_fx(&self) -> &EffectChain {
+        &self.master_fx
+    }
+
+    /// Get mutable master effects chain
+    pub fn master_fx_mut(&mut self) -> &mut EffectChain {
+        &mut self.master_fx
+    }
+
+    /// Get track effects chain for a specific track
+    pub fn track_fx(&self, track_id: u8) -> Option<&EffectChain> {
+        if track_id >= 1 && track_id <= 6 {
+            Some(&self.tracks[(track_id - 1) as usize].track_fx)
+        } else {
+            None
+        }
+    }
+
+    /// Get mutable track effects chain for a specific track
+    pub fn track_fx_mut(&mut self, track_id: u8) -> Option<&mut EffectChain> {
+        if track_id >= 1 && track_id <= 6 {
+            Some(&mut self.tracks[(track_id - 1) as usize].track_fx)
+        } else {
+            None
+        }
+    }
+
+    /// Update tempo for all tempo-synced effects
+    pub fn update_tempo(&mut self, bpm: f32) {
+        self.input_fx.update_tempo(bpm);
+        self.master_fx.update_tempo(bpm);
+        
+        for track in &mut self.tracks {
+            track.track_fx.update_tempo(bpm);
+        }
     }
 }
 

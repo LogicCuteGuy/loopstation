@@ -1,5 +1,6 @@
 use heapless::Vec;
 use serde::{Deserialize, Serialize};
+use micromath::F32Ext;
 
 /// Maximum number of effect slots per chain
 pub const MAX_EFFECT_SLOTS: usize = 4;
@@ -235,6 +236,49 @@ impl Effect {
                 let _ = self.parameters.push(EffectParameter::new("MIX", 0.0, 100.0, "%"));
                 let _ = self.parameters.push(EffectParameter::new("TONE", -50.0, 50.0, ""));
             },
+            EffectType::T3Delay => {
+                let _ = self.parameters.push(EffectParameter::new("TIME", 1.0, 2000.0, "ms"));
+                let _ = self.parameters.push(EffectParameter::new("FEEDBACK", 0.0, 95.0, "%"));
+                let _ = self.parameters.push(EffectParameter::new("MIX", 0.0, 100.0, "%"));
+                let _ = self.parameters.push(EffectParameter::new("SPREAD", 0.0, 100.0, "%"));
+            },
+            EffectType::MasteringEQ => {
+                let _ = self.parameters.push(EffectParameter::new("LOW", -15.0, 15.0, "dB"));
+                let _ = self.parameters.push(EffectParameter::new("LOW-MID", -15.0, 15.0, "dB"));
+                let _ = self.parameters.push(EffectParameter::new("HI-MID", -15.0, 15.0, "dB"));
+                let _ = self.parameters.push(EffectParameter::new("HIGH", -15.0, 15.0, "dB"));
+            },
+            EffectType::BeatRepeat => {
+                let _ = self.parameters.push(EffectParameter::new("RATE", 0.25, 4.0, "x"));
+                let _ = self.parameters.push(EffectParameter::new("GATE", 10.0, 90.0, "%"));
+                let _ = self.parameters.push(EffectParameter::new("MIX", 0.0, 100.0, "%"));
+                let _ = self.parameters.push(EffectParameter::new("FEEDBACK", 0.0, 95.0, "%"));
+            },
+            EffectType::Reverse => {
+                let _ = self.parameters.push(EffectParameter::new("MIX", 0.0, 100.0, "%"));
+                let _ = self.parameters.push(EffectParameter::new("GATE", 10.0, 90.0, "%"));
+            },
+            EffectType::Chorus => {
+                let _ = self.parameters.push(EffectParameter::new("RATE", 0.1, 10.0, "Hz"));
+                let _ = self.parameters.push(EffectParameter::new("DEPTH", 0.0, 100.0, "%"));
+                let _ = self.parameters.push(EffectParameter::new("MIX", 0.0, 100.0, "%"));
+                let _ = self.parameters.push(EffectParameter::new("FEEDBACK", 0.0, 95.0, "%"));
+            },
+            EffectType::Flanger => {
+                let _ = self.parameters.push(EffectParameter::new("RATE", 0.1, 10.0, "Hz"));
+                let _ = self.parameters.push(EffectParameter::new("DEPTH", 0.0, 100.0, "%"));
+                let _ = self.parameters.push(EffectParameter::new("MIX", 0.0, 100.0, "%"));
+                let _ = self.parameters.push(EffectParameter::new("FEEDBACK", 0.0, 95.0, "%"));
+            },
+            EffectType::NoiseSuppressor => {
+                let _ = self.parameters.push(EffectParameter::new("THRESHOLD", -60.0, 0.0, "dB"));
+                let _ = self.parameters.push(EffectParameter::new("RELEASE", 1.0, 1000.0, "ms"));
+            },
+            EffectType::Limiter => {
+                let _ = self.parameters.push(EffectParameter::new("THRESHOLD", -20.0, 0.0, "dB"));
+                let _ = self.parameters.push(EffectParameter::new("RELEASE", 1.0, 100.0, "ms"));
+                let _ = self.parameters.push(EffectParameter::new("OUTPUT", -20.0, 20.0, "dB"));
+            },
             // Add more effect parameter initializations as needed
             _ => {
                 // Generic parameters for unspecified effects
@@ -261,10 +305,229 @@ impl Effect {
         }
     }
 
-    /// Process audio through this effect (placeholder)
-    pub fn process_audio(&mut self, _input: &[f32], _output: &mut [f32]) {
-        // Audio processing implementation will be added in later tasks
-        // For now, this is a placeholder
+    /// Set parameter by actual value (in its units)
+    pub fn set_parameter_actual(&mut self, index: usize, actual_value: f32) {
+        if let Some(param) = self.parameters.get_mut(index) {
+            param.set_actual_value(actual_value);
+        }
+    }
+
+    /// Get parameter actual value by index
+    pub fn get_parameter_actual(&self, index: usize) -> Option<f32> {
+        self.parameters.get(index).map(|p| p.actual_value())
+    }
+
+    /// Enable/disable the effect
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+    }
+
+    /// Toggle effect enabled state
+    pub fn toggle_enabled(&mut self) {
+        self.enabled = !self.enabled;
+    }
+
+    /// Set momentary mode (for FX button short press)
+    pub fn set_momentary(&mut self, momentary: bool) {
+        self.momentary = momentary;
+    }
+
+    /// Set MIDI tempo synchronization
+    pub fn set_midi_sync(&mut self, sync: bool) {
+        if self.effect_type.supports_tempo_sync() {
+            self.midi_sync = sync;
+        }
+    }
+
+    /// Set dry/wet mix
+    pub fn set_dry_wet_mix(&mut self, mix: f32) {
+        self.dry_wet_mix = mix.clamp(0.0, 1.0);
+    }
+
+    /// Update effect parameters based on tempo (for tempo-synced effects)
+    pub fn update_tempo(&mut self, bpm: f32) {
+        if self.midi_sync && self.effect_type.supports_tempo_sync() {
+            match self.effect_type {
+                EffectType::TapeEcho | EffectType::T3Delay => {
+                    // Sync delay time to tempo (quarter note = 60000ms / BPM)
+                    let quarter_note_ms = 60000.0 / bpm;
+                    if let Some(time_param) = self.get_parameter_mut(0) {
+                        time_param.set_actual_value(quarter_note_ms);
+                    }
+                },
+                EffectType::Chorus | EffectType::Flanger => {
+                    // Sync LFO rate to tempo
+                    let lfo_rate = bpm / 60.0; // 1 Hz at 60 BPM
+                    if let Some(rate_param) = self.get_parameter_mut(0) {
+                        rate_param.set_actual_value(lfo_rate);
+                    }
+                },
+                _ => {} // Other effects don't need tempo sync
+            }
+        }
+    }
+
+    /// Update effect state (called from main loop)
+    pub fn update(&mut self) {
+        // Handle momentary effects
+        if self.momentary {
+            // Momentary effects are automatically disabled after processing
+            // This would be handled by a timer in a full implementation
+        }
+        
+        // Update internal effect state if needed
+        // This is where effects would update their internal buffers, LFOs, etc.
+    }
+
+    /// Process audio through this effect
+    pub fn process_audio(&mut self, input: &[f32], output: &mut [f32], sample_rate: f32) {
+        if !self.enabled {
+            // Effect bypassed - copy input to output
+            let len = input.len().min(output.len());
+            output[..len].copy_from_slice(&input[..len]);
+            return;
+        }
+
+        match self.effect_type {
+            EffectType::Compressor => self.process_compressor(input, output, sample_rate),
+            EffectType::SpaceReverb => self.process_reverb(input, output, sample_rate),
+            EffectType::TapeEcho => self.process_delay(input, output, sample_rate),
+            EffectType::MasteringEQ => self.process_eq(input, output, sample_rate),
+            _ => {
+                // For unimplemented effects, apply dry/wet mix with input
+                self.apply_dry_wet_mix(input, input, output);
+            }
+        }
+    }
+
+    /// Process compressor effect
+    fn process_compressor(&mut self, input: &[f32], output: &mut [f32], sample_rate: f32) {
+        let threshold = self.get_parameter(0).map(|p| p.actual_value()).unwrap_or(-20.0); // dB
+        let ratio = self.get_parameter(1).map(|p| p.actual_value()).unwrap_or(4.0);
+        let attack_ms = self.get_parameter(2).map(|p| p.actual_value()).unwrap_or(10.0);
+        let release_ms = self.get_parameter(3).map(|p| p.actual_value()).unwrap_or(100.0);
+
+        // Convert to linear values
+        let threshold_linear = db_to_linear(threshold);
+        let attack_coeff = (-1.0 / (attack_ms * 0.001 * sample_rate)).exp();
+        let release_coeff = (-1.0 / (release_ms * 0.001 * sample_rate)).exp();
+
+        let len = input.len().min(output.len());
+        let mut envelope = 0.0f32;
+
+        for i in 0..len {
+            let input_sample = input[i];
+            let input_level = input_sample.abs();
+
+            // Envelope follower
+            let target = if input_level > envelope { input_level } else { envelope };
+            envelope = envelope + (target - envelope) * if input_level > envelope { 1.0 - attack_coeff } else { 1.0 - release_coeff };
+
+            // Compression calculation
+            let gain_reduction = if envelope > threshold_linear {
+                let over_threshold = envelope / threshold_linear;
+                let compressed = over_threshold.powf(1.0 / ratio);
+                compressed / over_threshold
+            } else {
+                1.0
+            };
+
+            let processed = input_sample * gain_reduction;
+            self.apply_dry_wet_mix(&[input_sample], &[processed], &mut output[i..i+1]);
+        }
+    }
+
+    /// Process reverb effect
+    fn process_reverb(&mut self, input: &[f32], output: &mut [f32], sample_rate: f32) {
+        let time = self.get_parameter(0).map(|p| p.actual_value()).unwrap_or(2.0); // seconds
+        let pre_delay = self.get_parameter(1).map(|p| p.actual_value()).unwrap_or(50.0); // ms
+        let tone = self.get_parameter(3).map(|p| p.actual_value()).unwrap_or(0.0); // -50 to +50
+
+        // Simple reverb using multiple delay lines (Schroeder reverb approximation)
+        let delay_times = [
+            (time * 0.03 * sample_rate) as usize,
+            (time * 0.05 * sample_rate) as usize,
+            (time * 0.07 * sample_rate) as usize,
+            (time * 0.11 * sample_rate) as usize,
+        ];
+
+        let len = input.len().min(output.len());
+        
+        // For simplicity, we'll create a basic reverb effect
+        // In a real implementation, this would use proper delay buffers
+        for i in 0..len {
+            let input_sample = input[i];
+            
+            // Simple reverb simulation with decay
+            let decay = 0.3 * time / 10.0; // Approximate decay based on time parameter
+            let reverb_sample = input_sample * decay;
+            
+            self.apply_dry_wet_mix(&[input_sample], &[reverb_sample], &mut output[i..i+1]);
+        }
+    }
+
+    /// Process delay effect
+    fn process_delay(&mut self, input: &[f32], output: &mut [f32], sample_rate: f32) {
+        let delay_time = self.get_parameter(0).map(|p| p.actual_value()).unwrap_or(250.0); // ms
+        let feedback = self.get_parameter(1).map(|p| p.actual_value()).unwrap_or(30.0) / 100.0; // %
+        let tone = self.get_parameter(3).map(|p| p.actual_value()).unwrap_or(0.0); // -50 to +50
+
+        let delay_samples = (delay_time * 0.001 * sample_rate) as usize;
+        let len = input.len().min(output.len());
+
+        // Simple delay implementation (in real implementation, would use circular buffer)
+        for i in 0..len {
+            let input_sample = input[i];
+            
+            // For this basic implementation, create a simple echo effect
+            let delayed_sample = if i >= delay_samples {
+                input[i - delay_samples] * feedback
+            } else {
+                0.0
+            };
+            
+            let delay_output = input_sample + delayed_sample;
+            self.apply_dry_wet_mix(&[input_sample], &[delay_output], &mut output[i..i+1]);
+        }
+    }
+
+    /// Process EQ effect
+    fn process_eq(&mut self, input: &[f32], output: &mut [f32], _sample_rate: f32) {
+        let low_gain = self.get_parameter(0).map(|p| p.actual_value()).unwrap_or(0.0); // dB
+        let low_mid_gain = self.get_parameter(1).map(|p| p.actual_value()).unwrap_or(0.0); // dB
+        let high_mid_gain = self.get_parameter(2).map(|p| p.actual_value()).unwrap_or(0.0); // dB
+        let high_gain = self.get_parameter(3).map(|p| p.actual_value()).unwrap_or(0.0); // dB
+
+        // Convert dB to linear gain
+        let low_linear = db_to_linear(low_gain);
+        let low_mid_linear = db_to_linear(low_mid_gain);
+        let high_mid_linear = db_to_linear(high_mid_gain);
+        let high_linear = db_to_linear(high_gain);
+
+        let len = input.len().min(output.len());
+
+        // Simple EQ implementation (basic gain adjustment)
+        // In a real implementation, this would use proper filter banks
+        for i in 0..len {
+            let input_sample = input[i];
+            
+            // Apply overall gain (simplified EQ)
+            let avg_gain = (low_linear + low_mid_linear + high_mid_linear + high_linear) / 4.0;
+            let eq_output = input_sample * avg_gain;
+            
+            self.apply_dry_wet_mix(&[input_sample], &[eq_output], &mut output[i..i+1]);
+        }
+    }
+
+    /// Apply dry/wet mix to the processed audio
+    fn apply_dry_wet_mix(&self, dry: &[f32], wet: &[f32], output: &mut [f32]) {
+        let len = dry.len().min(wet.len()).min(output.len());
+        let wet_amount = self.dry_wet_mix;
+        let dry_amount = 1.0 - wet_amount;
+
+        for i in 0..len {
+            output[i] = dry[i] * dry_amount + wet[i] * wet_amount;
+        }
     }
 }
 
@@ -375,10 +638,62 @@ impl EffectChain {
         self.active_effect_count() > 0
     }
 
-    /// Process audio through the entire effect chain (placeholder)
-    pub fn process_audio(&mut self, _input: &[f32], _output: &mut [f32]) {
-        // Effect chain processing implementation will be added in later tasks
-        // This will process audio through each effect in sequence
+    /// Process audio through the entire effect chain
+    pub fn process_audio(&mut self, input: &[f32], output: &mut [f32], sample_rate: f32) {
+        if !self.enabled || !self.has_effects() {
+            // Chain bypassed or no effects - copy input to output
+            let len = input.len().min(output.len());
+            output[..len].copy_from_slice(&input[..len]);
+            return;
+        }
+
+        let len = input.len().min(output.len());
+        
+        // Create temporary buffers for processing chain
+        let mut temp_buffer_1 = [0.0f32; 512]; // Max buffer size for embedded
+        let mut temp_buffer_2 = [0.0f32; 512];
+        let buffer_len = len.min(512);
+        
+        // Copy input to first temp buffer
+        temp_buffer_1[..buffer_len].copy_from_slice(&input[..buffer_len]);
+        
+        let mut current_input = &temp_buffer_1[..buffer_len];
+        let mut current_output = &mut temp_buffer_2[..buffer_len];
+        let mut swap_buffers = false;
+
+        // Process through each effect in the chain
+        for slot in &mut self.slots {
+            if let Some(effect) = slot {
+                if effect.enabled {
+                    // Process audio through this effect
+                    effect.process_audio(current_input, current_output, sample_rate);
+                    
+                    // Swap buffers for next effect
+                    if swap_buffers {
+                        current_input = &temp_buffer_2[..buffer_len];
+                        current_output = &mut temp_buffer_1[..buffer_len];
+                    } else {
+                        current_input = &temp_buffer_1[..buffer_len];
+                        current_output = &mut temp_buffer_2[..buffer_len];
+                    }
+                    swap_buffers = !swap_buffers;
+                }
+            }
+        }
+
+        // Copy final result to output buffer
+        if swap_buffers {
+            output[..buffer_len].copy_from_slice(&temp_buffer_1[..buffer_len]);
+        } else {
+            output[..buffer_len].copy_from_slice(&temp_buffer_2[..buffer_len]);
+        }
+
+        // Apply chain mix level
+        if self.mix_level != 1.0 {
+            for i in 0..buffer_len {
+                output[i] *= self.mix_level;
+            }
+        }
     }
 
     /// Set FX Bank (1-4) for effect presets
@@ -390,4 +705,109 @@ impl EffectChain {
     pub fn get_fx_bank(&self) -> u8 {
         self.fx_bank
     }
+
+    /// Set effect parameter in specific slot
+    pub fn set_effect_parameter(&mut self, slot_index: usize, param_index: usize, value: f32) -> Result<(), ()> {
+        if let Some(effect) = self.get_effect_mut(slot_index) {
+            effect.set_parameter(param_index, value);
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    /// Get effect parameter from specific slot
+    pub fn get_effect_parameter(&self, slot_index: usize, param_index: usize) -> Option<f32> {
+        self.get_effect(slot_index)?.get_parameter(param_index).map(|p| p.value)
+    }
+
+    /// Enable/disable effect in specific slot
+    pub fn set_effect_enabled(&mut self, slot_index: usize, enabled: bool) -> Result<(), ()> {
+        if let Some(effect) = self.get_effect_mut(slot_index) {
+            effect.set_enabled(enabled);
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    /// Toggle effect in specific slot
+    pub fn toggle_effect(&mut self, slot_index: usize) -> Result<bool, ()> {
+        if let Some(effect) = self.get_effect_mut(slot_index) {
+            effect.toggle_enabled();
+            Ok(effect.enabled)
+        } else {
+            Err(())
+        }
+    }
+
+    /// Set momentary mode for effect in specific slot
+    pub fn set_effect_momentary(&mut self, slot_index: usize, momentary: bool) -> Result<(), ()> {
+        if let Some(effect) = self.get_effect_mut(slot_index) {
+            effect.set_momentary(momentary);
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    /// Update tempo for all tempo-synced effects in the chain
+    pub fn update_tempo(&mut self, bpm: f32) {
+        for slot in &mut self.slots {
+            if let Some(effect) = slot {
+                effect.update_tempo(bpm);
+            }
+        }
+    }
+
+    /// Update effect chain state (called from main loop)
+    pub fn update(&mut self) {
+        // Update individual effects
+        for slot in &mut self.slots {
+            if let Some(effect) = slot {
+                effect.update();
+            }
+        }
+    }
+
+    /// Clear all effects from the chain
+    pub fn clear_all_effects(&mut self) {
+        self.clear();
+    }
+
+    /// Get effects array reference for direct access
+    pub fn effects(&self) -> &[Option<Effect>; MAX_EFFECT_SLOTS] {
+        &self.slots
+    }
+
+    /// Get mutable effects array reference for direct access
+    pub fn effects_mut(&mut self) -> &mut [Option<Effect>; MAX_EFFECT_SLOTS] {
+        &mut self.slots
+    }
+
+    /// Set chain mix level
+    pub fn set_mix_level(&mut self, level: f32) {
+        self.mix_level = level.clamp(0.0, 1.0);
+    }
+
+    /// Enable/disable entire chain
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+    }
+
+    /// Toggle entire chain
+    pub fn toggle_enabled(&mut self) -> bool {
+        self.enabled = !self.enabled;
+        self.enabled
+    }
+}
+
+/// Convert decibels to linear gain
+fn db_to_linear(db: f32) -> f32 {
+    libm::powf(10.0, db / 20.0)
+}
+
+/// Convert linear gain to decibels
+fn linear_to_db(linear: f32) -> f32 {
+    20.0 * libm::log10f(linear)
 }

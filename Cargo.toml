@@ -2,5 +2,6 @@
 members = [
     "loopstation_core_stm32",
     "loopstation_plugin_pc",
+    "loopstation_display_network_esp32",
     "xtask",
 ]

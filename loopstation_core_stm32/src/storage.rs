@@ -381,6 +381,12 @@ impl MemorySystem {
     pub fn set_store_mode(&mut self, mode: StoreMode) {
         self.store_mode = mode;
     }
+
+    /// Update memory system state (called from main loop)
+    pub fn update(&mut self) {
+        // Handle auto-save functionality, cleanup, etc.
+        // This is where background memory management would occur
+    }
 }
 
 impl Default for MemorySystem {

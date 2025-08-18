@@ -129,6 +129,25 @@ impl EffectType {
     }
 }
 
+/// Effect parameter change action for undo/redo
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EffectParameterChange {
+    /// Effect chain type
+    pub chain_type: EffectChainType,
+    /// Track ID (for Track FX, None for Input/Master FX)
+    pub track_id: Option<u8>,
+    /// Effect slot index (0-3)
+    pub slot_index: usize,
+    /// Parameter index within the effect
+    pub param_index: usize,
+    /// Previous parameter value
+    pub previous_value: f32,
+    /// New parameter value
+    pub new_value: f32,
+    /// Timestamp of change
+    pub timestamp: u32,
+}
+
 /// Effect parameter with value and metadata
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EffectParameter {
@@ -174,11 +193,12 @@ impl EffectParameter {
 }
 
 /// Individual effect instance
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Effect {
     /// Type of effect
     pub effect_type: EffectType,
     /// Effect parameters
+    #[serde(skip)]
     pub parameters: Vec<EffectParameter, 8>, // Max 8 parameters per effect
     /// Whether effect is enabled
     pub enabled: bool,
@@ -532,7 +552,7 @@ impl Effect {
 }
 
 /// Effect chain containing up to 4 effects
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EffectChain {
     /// Effect slots (up to 4 per chain)
     pub slots: [Option<Effect>; MAX_EFFECT_SLOTS],
@@ -544,6 +564,12 @@ pub struct EffectChain {
     pub chain_type: EffectChainType,
     /// FX Bank number (1-4) for effect presets
     pub fx_bank: u8,
+    /// Effect parameter change history for undo/redo
+    pub parameter_history: Vec<EffectParameterChange, 32>, // Max 32 parameter changes
+    /// Current position in parameter history
+    pub history_position: usize,
+    /// Current tempo for tempo-synced effects
+    pub current_tempo: f32,
 }
 
 impl EffectChain {
@@ -555,6 +581,9 @@ impl EffectChain {
             enabled: true,
             chain_type,
             fx_bank: 1,
+            parameter_history: Vec::new(),
+            history_position: 0,
+            current_tempo: 120.0, // Default tempo
         }
     }
 
@@ -638,6 +667,16 @@ impl EffectChain {
         self.active_effect_count() > 0
     }
 
+    /// Get reference to effects array
+    pub fn effects(&self) -> &[Option<Effect>; MAX_EFFECT_SLOTS] {
+        &self.slots
+    }
+
+    /// Get mutable reference to effects array
+    pub fn effects_mut(&mut self) -> &mut [Option<Effect>; MAX_EFFECT_SLOTS] {
+        &mut self.slots
+    }
+
     /// Process audio through the entire effect chain
     pub fn process_audio(&mut self, input: &[f32], output: &mut [f32], sample_rate: f32) {
         if !self.enabled || !self.has_effects() {
@@ -706,14 +745,106 @@ impl EffectChain {
         self.fx_bank
     }
 
-    /// Set effect parameter in specific slot
-    pub fn set_effect_parameter(&mut self, slot_index: usize, param_index: usize, value: f32) -> Result<(), ()> {
+    /// Set effect parameter in specific slot with undo support
+    pub fn set_effect_parameter(&mut self, slot_index: usize, param_index: usize, value: f32, timestamp: u32, track_id: Option<u8>) -> Result<(), ()> {
+        // First get the previous value
+        let previous_value = if let Some(effect) = self.get_effect(slot_index) {
+            effect.get_parameter(param_index).map(|p| p.value).unwrap_or(0.0)
+        } else {
+            return Err(());
+        };
+        
+        // Only add to history if value actually changed
+        if (previous_value - value).abs() > 0.001 {
+            let change = EffectParameterChange {
+                chain_type: self.chain_type,
+                track_id,
+                slot_index,
+                param_index,
+                previous_value,
+                new_value: value,
+                timestamp,
+            };
+            
+            // Add to parameter history
+            self.add_parameter_change(change);
+        }
+        
+        // Now set the parameter
         if let Some(effect) = self.get_effect_mut(slot_index) {
             effect.set_parameter(param_index, value);
             Ok(())
         } else {
             Err(())
         }
+    }
+
+    /// Add parameter change to history
+    fn add_parameter_change(&mut self, change: EffectParameterChange) {
+        // Clear any future history when new change is made
+        self.parameter_history.truncate(self.history_position);
+        
+        if self.parameter_history.push(change.clone()).is_err() {
+            // History buffer full, remove oldest entry
+            self.parameter_history.remove(0);
+            let _ = self.parameter_history.push(change);
+        }
+        
+        self.history_position = self.parameter_history.len();
+    }
+
+    /// Undo last effect parameter change
+    pub fn undo_parameter_change(&mut self) -> bool {
+        if self.history_position == 0 || self.parameter_history.is_empty() {
+            return false; // Nothing to undo
+        }
+
+        self.history_position -= 1;
+        let change = self.parameter_history[self.history_position].clone();
+
+        // Apply the undo (restore previous value)
+        if let Some(effect) = self.get_effect_mut(change.slot_index) {
+            effect.set_parameter(change.param_index, change.previous_value);
+            true
+        } else {
+            // Effect no longer exists, skip this undo
+            false
+        }
+    }
+
+    /// Redo last undone effect parameter change
+    pub fn redo_parameter_change(&mut self) -> bool {
+        if self.history_position >= self.parameter_history.len() {
+            return false; // Nothing to redo
+        }
+
+        let change = self.parameter_history[self.history_position].clone();
+        self.history_position += 1;
+
+        // Apply the redo (restore new value)
+        if let Some(effect) = self.get_effect_mut(change.slot_index) {
+            effect.set_parameter(change.param_index, change.new_value);
+            true
+        } else {
+            // Effect no longer exists, skip this redo
+            false
+        }
+    }
+
+    /// Get number of available parameter undos
+    pub fn parameter_undo_count(&self) -> usize {
+        self.history_position
+    }
+
+    /// Get number of available parameter redos
+    pub fn parameter_redo_count(&self) -> usize {
+        self.parameter_history.len() - self.history_position
+    }
+
+    /// Clear all parameter change history
+    pub fn clear_parameter_history(&mut self) {
+        self.parameter_history.clear();
+        self.history_position = 0;
     }
 
     /// Get effect parameter from specific slot
@@ -753,11 +884,17 @@ impl EffectChain {
 
     /// Update tempo for all tempo-synced effects in the chain
     pub fn update_tempo(&mut self, bpm: f32) {
+        self.current_tempo = bpm;
         for slot in &mut self.slots {
             if let Some(effect) = slot {
                 effect.update_tempo(bpm);
             }
         }
+    }
+
+    /// Get current tempo
+    pub fn get_current_tempo(&self) -> f32 {
+        self.current_tempo
     }
 
     /// Update effect chain state (called from main loop)
@@ -775,15 +912,7 @@ impl EffectChain {
         self.clear();
     }
 
-    /// Get effects array reference for direct access
-    pub fn effects(&self) -> &[Option<Effect>; MAX_EFFECT_SLOTS] {
-        &self.slots
-    }
 
-    /// Get mutable effects array reference for direct access
-    pub fn effects_mut(&mut self) -> &mut [Option<Effect>; MAX_EFFECT_SLOTS] {
-        &mut self.slots
-    }
 
     /// Set chain mix level
     pub fn set_mix_level(&mut self, level: f32) {

@@ -382,8 +382,8 @@ impl MidiHandler {
         self.send_message(message)
     }
 
-    /// Process MIDI clock message
-    pub fn process_clock(&mut self) {
+    /// Process MIDI clock message with timing
+    pub fn process_clock(&mut self, timestamp: u32) {
         self.clock_counter += 1;
         
         // MIDI clock runs at 24 pulses per quarter note
@@ -392,6 +392,50 @@ impl MidiHandler {
             // One quarter note completed
             // Tempo calculation would need timing information
         }
+    }
+
+    /// Process MIDI input with channel filtering
+    pub fn process_input_with_filtering(&mut self, data: &[u8]) -> Vec<MidiMessage, 16> {
+        let messages = self.process_input(data);
+        let mut filtered_messages = Vec::new();
+
+        for message in messages {
+            if self.should_process_message(&message) {
+                if filtered_messages.push(message).is_err() {
+                    break; // Output buffer full
+                }
+            }
+        }
+
+        filtered_messages
+    }
+
+    /// Check if MIDI channel filtering is enabled
+    pub fn is_channel_filtering_enabled(&self) -> bool {
+        match self.settings.midi_channel {
+            MidiChannel::Omni => false,
+            MidiChannel::Channel(_) => true,
+        }
+    }
+
+    /// Get configured MIDI channel
+    pub fn get_midi_channel(&self) -> MidiChannel {
+        self.settings.midi_channel
+    }
+
+    /// Set MIDI channel
+    pub fn set_midi_channel(&mut self, channel: MidiChannel) {
+        self.settings.midi_channel = channel;
+    }
+
+    /// Enable/disable MIDI clock sync
+    pub fn set_clock_sync(&mut self, enabled: bool) {
+        self.settings.clock_sync = enabled;
+    }
+
+    /// Check if MIDI clock sync is enabled
+    pub fn is_clock_sync_enabled(&self) -> bool {
+        self.settings.clock_sync
     }
 
     /// Get output data to send

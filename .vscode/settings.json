@@ -1,3 +1,4 @@
 {
-    "kiroAgent.configureMCP": "Disabled"
+    "kiroAgent.configureMCP": "Disabled",
+    "cmake.sourceDirectory": "C:/Users/LogicCuteGuy/Downloads/loopstation/loopstation_display_network_esp32"
 }

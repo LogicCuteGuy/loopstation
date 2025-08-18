@@ -5,6 +5,11 @@
       <sourceFolder url="file://$MODULE_DIR$/loopstation_core/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/loopstation_plugin/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/xtask/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/loopstation_core_stm32/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/loopstation_core_stm32/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/loopstation_plugin_pc/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/loopstation_core_stm32/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/loopstation_display_network_esp32/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/loopstation_core/target" />
       <excludeFolder url="file://$MODULE_DIR$/loopstation_plugin/target" />
       <excludeFolder url="file://$MODULE_DIR$/target" />

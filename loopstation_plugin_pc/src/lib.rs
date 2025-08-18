@@ -1,7 +1,7 @@
+use loopstation_core_stm32::midi::{MidiMessage, cc_mappings, note_mappings};
+use loopstation_core_stm32::{LoopstationCore, MidiHandler};
 use nih_plug::prelude::*;
 use std::sync::Arc;
-use loopstation_core_stm32::{LoopstationCore, MidiHandler};
-use loopstation_core_stm32::midi::{MidiMessage, cc_mappings, note_mappings};
 
 pub const NUM_CHANNELS: u32 = 2;
 pub const NUM_TRACKS: usize = 6;
@@ -122,10 +122,10 @@ struct LoopstationPluginParams {
     // Global parameters
     #[id = "master_level"]
     pub master_level: FloatParam,
-    
+
     #[id = "tempo"]
     pub tempo: FloatParam,
-    
+
     // Transport controls
     #[id = "all_start"]
     pub all_start: BoolParam,
@@ -133,7 +133,7 @@ struct LoopstationPluginParams {
     pub all_stop: BoolParam,
     #[id = "tap_tempo"]
     pub tap_tempo: BoolParam,
-    
+
     // Expression pedal inputs
     #[id = "expression_1"]
     pub expression_1: FloatParam,
@@ -220,17 +220,20 @@ impl Default for LoopstationPluginParams {
             tempo: FloatParam::new(
                 "Tempo",
                 120.0,
-                FloatRange::Linear { min: 60.0, max: 200.0 },
+                FloatRange::Linear {
+                    min: 60.0,
+                    max: 200.0,
+                },
             )
             .with_smoother(SmoothingStyle::Linear(100.0))
             .with_unit(" BPM")
             .with_step_size(0.1),
-            
+
             // Transport controls
             all_start: BoolParam::new("All Start", false),
             all_stop: BoolParam::new("All Stop", false),
             tap_tempo: BoolParam::new("Tap Tempo", false),
-            
+
             // Expression pedal inputs
             expression_1: FloatParam::new(
                 "Expression 1",
@@ -281,7 +284,10 @@ impl LoopstationPluginParams {
         FloatParam::new(
             &format!("Track {} Pan", track_id),
             0.0,
-            FloatRange::Linear { min: -1.0, max: 1.0 },
+            FloatRange::Linear {
+                min: -1.0,
+                max: 1.0,
+            },
         )
         .with_smoother(SmoothingStyle::Linear(50.0))
         .with_value_to_string(formatters::v2s_f32_percentage(0))
@@ -339,33 +345,51 @@ impl LoopstationPlugin {
                 self.params.track_6_mute.value(),
             ),
         ];
-        
+
         // Update track parameters
         for (track_id, (volume, pan, record, play, mute)) in track_params.iter().enumerate() {
-            self.update_track_parameters((track_id + 1) as u8, *volume, *pan, *record, *play, *mute);
+            self.update_track_parameters(
+                (track_id + 1) as u8,
+                *volume,
+                *pan,
+                *record,
+                *play,
+                *mute,
+            );
         }
-        
+
         // Update master level
         let master_level = self.params.master_level.smoothed.next();
         self.loopstation_core.set_master_level(master_level);
-        
+
         // Update tempo
         let tempo = self.params.tempo.smoothed.next();
         self.loopstation_core.tempo = tempo;
     }
-    
+
     /// Update parameters for a specific track
-    fn update_track_parameters(&mut self, track_id: u8, volume: f32, pan: f32, 
-                              record: bool, play: bool, mute: bool) {
+    fn update_track_parameters(
+        &mut self,
+        track_id: u8,
+        volume: f32,
+        pan: f32,
+        record: bool,
+        play: bool,
+        mute: bool,
+    ) {
         // Update volume and pan
         if let Err(_) = self.loopstation_core.set_track_level(track_id, volume) {
             // Handle error silently for now
         }
-        
-        if let Some(track) = self.loopstation_core.audio_engine_mut().get_track_mut(track_id) {
+
+        if let Some(track) = self
+            .loopstation_core
+            .audio_engine_mut()
+            .get_track_mut(track_id)
+        {
             track.set_pan(pan);
         }
-        
+
         // Simple state logic - in a real implementation this would be more sophisticated
         if record && !play {
             let _ = self.loopstation_core.start_recording(track_id);
@@ -374,7 +398,11 @@ impl LoopstationPlugin {
             if let Some(track) = self.loopstation_core.audio_engine().get_track(track_id) {
                 if track.has_audio() {
                     // Track has audio, start playback
-                    if let Some(track_mut) = self.loopstation_core.audio_engine_mut().get_track_mut(track_id) {
+                    if let Some(track_mut) = self
+                        .loopstation_core
+                        .audio_engine_mut()
+                        .get_track_mut(track_id)
+                    {
                         track_mut.state = loopstation_core_stm32::TrackState::Playing;
                     }
                 } else {
@@ -385,39 +413,53 @@ impl LoopstationPlugin {
         } else if !play && !record {
             let _ = self.loopstation_core.stop_track(track_id);
         }
-        
+
         if mute {
             let _ = self.loopstation_core.toggle_mute(track_id);
         }
     }
-    
+
     /// Process MIDI input and update parameters accordingly
     fn process_midi_input(&mut self, context: &mut impl ProcessContext<Self>) {
         // Process MIDI events from the context
         while let Some(event) = context.next_event() {
             match event {
-                NoteEvent::NoteOn { channel, note, velocity, .. } => {
+                NoteEvent::NoteOn {
+                    channel,
+                    note,
+                    velocity,
+                    ..
+                } => {
                     let midi_data = vec![0x90 | channel, note, (velocity * 127.0) as u8];
                     let messages = self.midi_handler.process_input(&midi_data);
                     for message in messages {
                         self.handle_midi_message(message);
                     }
                 }
-                NoteEvent::NoteOff { channel, note, velocity, .. } => {
+                NoteEvent::NoteOff {
+                    channel,
+                    note,
+                    velocity,
+                    ..
+                } => {
                     let midi_data = vec![0x80 | channel, note, (velocity * 127.0) as u8];
                     let messages = self.midi_handler.process_input(&midi_data);
                     for message in messages {
                         self.handle_midi_message(message);
                     }
                 }
-                NoteEvent::MidiCC { channel, cc, value, .. } => {
+                NoteEvent::MidiCC {
+                    channel, cc, value, ..
+                } => {
                     let midi_data = vec![0xB0 | channel, cc, (value * 127.0) as u8];
                     let messages = self.midi_handler.process_input(&midi_data);
                     for message in messages {
                         self.handle_midi_message(message);
                     }
                 }
-                NoteEvent::MidiProgramChange { channel, program, .. } => {
+                NoteEvent::MidiProgramChange {
+                    channel, program, ..
+                } => {
                     let midi_data = vec![0xC0 | channel, program];
                     let messages = self.midi_handler.process_input(&midi_data);
                     for message in messages {
@@ -428,11 +470,13 @@ impl LoopstationPlugin {
             }
         }
     }
-    
+
     /// Handle individual MIDI messages and map them to loopstation functions
     fn handle_midi_message(&mut self, message: MidiMessage) {
         match message {
-            MidiMessage::ControlChange { controller, value, .. } => {
+            MidiMessage::ControlChange {
+                controller, value, ..
+            } => {
                 self.handle_midi_cc(controller, value);
             }
             MidiMessage::NoteOn { note, velocity, .. } => {
@@ -452,11 +496,11 @@ impl LoopstationPlugin {
             _ => {} // Handle other message types as needed
         }
     }
-    
+
     /// Handle MIDI Control Change messages
     fn handle_midi_cc(&mut self, controller: u8, value: u8) {
         let normalized_value = value as f32 / 127.0;
-        
+
         match controller {
             // Track volumes - directly control loopstation core
             cc_mappings::TRACK_1_VOLUME => {
@@ -483,7 +527,7 @@ impl LoopstationPlugin {
                 let gain = util::db_to_gain((normalized_value * 72.0) - 60.0);
                 let _ = self.loopstation_core.set_track_level(6, gain);
             }
-            
+
             // Track pans - directly control loopstation core
             cc_mappings::TRACK_1_PAN => {
                 if let Some(track) = self.loopstation_core.audio_engine_mut().get_track_mut(1) {
@@ -515,19 +559,19 @@ impl LoopstationPlugin {
                     track.set_pan((normalized_value * 2.0) - 1.0);
                 }
             }
-            
+
             // Master volume
             cc_mappings::MASTER_VOLUME => {
                 let gain = util::db_to_gain((normalized_value * 72.0) - 60.0);
                 self.loopstation_core.set_master_level(gain);
             }
-            
+
             // Tempo
             cc_mappings::TEMPO => {
                 let tempo = 60.0 + (normalized_value * 140.0); // 60-200 BPM range
                 self.loopstation_core.tempo = tempo;
             }
-            
+
             // Expression pedals - store in project state for now
             cc_mappings::EXPRESSION_1 => {
                 // In a real implementation, this would control assigned parameters
@@ -542,17 +586,17 @@ impl LoopstationPlugin {
             cc_mappings::EXPRESSION_4 => {
                 // In a real implementation, this would control assigned parameters
             }
-            
+
             _ => {} // Ignore unmapped CCs
         }
     }
-    
+
     /// Handle MIDI Note messages for track control
     fn handle_midi_note(&mut self, note: u8, note_on: bool) {
         if !note_on {
             return; // Only handle note on events
         }
-        
+
         match note {
             // Track record/play - directly control loopstation core
             note_mappings::TRACK_1_REC_PLAY => {
@@ -573,7 +617,7 @@ impl LoopstationPlugin {
             note_mappings::TRACK_6_REC_PLAY => {
                 let _ = self.loopstation_core.start_recording(6);
             }
-            
+
             // Track stop
             note_mappings::TRACK_1_STOP => {
                 let _ = self.loopstation_core.stop_track(1);
@@ -593,14 +637,18 @@ impl LoopstationPlugin {
             note_mappings::TRACK_6_STOP => {
                 let _ = self.loopstation_core.stop_track(6);
             }
-            
+
             // Transport control
             note_mappings::ALL_START => {
                 // Start all tracks that have audio
                 for track_id in 1..=6 {
                     if let Some(track) = self.loopstation_core.audio_engine().get_track(track_id) {
                         if track.has_audio() {
-                            if let Some(track_mut) = self.loopstation_core.audio_engine_mut().get_track_mut(track_id) {
+                            if let Some(track_mut) = self
+                                .loopstation_core
+                                .audio_engine_mut()
+                                .get_track_mut(track_id)
+                            {
                                 track_mut.state = loopstation_core_stm32::TrackState::Playing;
                             }
                         }
@@ -617,24 +665,24 @@ impl LoopstationPlugin {
                 // Simple tap tempo implementation - in real implementation would track timing
                 // For now, just acknowledge the tap
             }
-            
+
             _ => {} // Ignore unmapped notes
         }
     }
-    
+
     /// Handle MIDI Program Change for memory slot switching
     fn handle_midi_program_change(&mut self, program: u8) {
         // Program Change maps to memory slots (PC#0 = Memory 1, etc.)
         let memory_slot = program + 1;
-        
+
         // In a full implementation, this would load the memory slot
         // For now, we'll just update the project state
         self.project_state.name = format!("Memory Slot {}", memory_slot);
-        
+
         // TODO: Load actual project data from memory slot
         // This would involve loading track audio data, effect settings, etc.
     }
-    
+
     /// Handle transport control parameters
     fn handle_transport_controls(&mut self) {
         // Handle all start
@@ -643,7 +691,11 @@ impl LoopstationPlugin {
                 if let Some(track) = self.loopstation_core.audio_engine().get_track(track_id) {
                     if track.has_audio() {
                         // Start playback on tracks with audio
-                        if let Some(track_mut) = self.loopstation_core.audio_engine_mut().get_track_mut(track_id) {
+                        if let Some(track_mut) = self
+                            .loopstation_core
+                            .audio_engine_mut()
+                            .get_track_mut(track_id)
+                        {
                             track_mut.state = loopstation_core_stm32::TrackState::Playing;
                         }
                     }
@@ -651,7 +703,7 @@ impl LoopstationPlugin {
             }
             // Note: Can't reset trigger since parameters are read-only in process context
         }
-        
+
         // Handle all stop
         if self.params.all_stop.value() {
             for track_id in 1..=6 {
@@ -659,7 +711,7 @@ impl LoopstationPlugin {
             }
             // Note: Can't reset trigger since parameters are read-only in process context
         }
-        
+
         // Handle tap tempo
         if self.params.tap_tempo.value() {
             // Simple tap tempo implementation - in real implementation would track timing
@@ -699,7 +751,6 @@ impl Plugin for LoopstationPlugin {
         },
     }];
 
-
     const MIDI_INPUT: MidiConfig = MidiConfig::MidiCCs;
     const MIDI_OUTPUT: MidiConfig = MidiConfig::MidiCCs;
 
@@ -728,10 +779,10 @@ impl Plugin for LoopstationPlugin {
         self.loopstation_core = LoopstationCore::new();
         self.loopstation_core.audio_engine.sample_rate = buffer_config.sample_rate as u32;
         self.loopstation_core.audio_engine.buffer_size = buffer_config.max_buffer_size as usize;
-        
+
         // Start the audio callback
         self.loopstation_core.audio_engine.start_callback();
-        
+
         true
     }
 
@@ -742,17 +793,18 @@ impl Plugin for LoopstationPlugin {
             track.play_position = 0;
             track.record_position = 0;
         }
-        
+
         // Reset statistics
-        self.loopstation_core.audio_engine.stats = loopstation_core_stm32::audio::AudioStats::default();
-        
+        self.loopstation_core.audio_engine.stats =
+            loopstation_core_stm32::audio::AudioStats::default();
+
         // Reset MIDI handler
         self.midi_handler = MidiHandler::new();
-        
+
         // Reset project state
         self.project_state = ProjectState::default();
     }
-    
+
     fn process(
         &mut self,
         buffer: &mut Buffer,
@@ -761,22 +813,22 @@ impl Plugin for LoopstationPlugin {
     ) -> ProcessStatus {
         // Process MIDI input first
         self.process_midi_input(context);
-        
+
         // Handle transport controls
         self.handle_transport_controls();
-        
+
         // Update loopstation core with current parameter values
         self.update_loopstation_parameters();
 
         // Process audio through loopstation core
         let num_samples = buffer.samples();
         let num_channels = buffer.channels();
-        
+
         if num_channels >= 2 && num_samples > 0 {
             // Prepare input buffer (interleaved stereo)
             let mut input_buffer = vec![0.0f32; num_samples * 2];
             let mut output_buffer = vec![0.0f32; num_samples * 2];
-            
+
             // Convert from nih-plug buffer format to interleaved stereo
             for (sample_idx, mut channel_samples) in buffer.iter_samples().enumerate() {
                 let left = *channel_samples.get_mut(0).unwrap_or(&mut 0.0);
@@ -785,19 +837,20 @@ impl Plugin for LoopstationPlugin {
                 } else {
                     left // Mono to stereo
                 };
-                
+
                 input_buffer[sample_idx * 2] = left;
                 input_buffer[sample_idx * 2 + 1] = right;
             }
-            
+
             // Process through loopstation core
-            self.loopstation_core.process_audio(&input_buffer, &mut output_buffer);
-            
+            self.loopstation_core
+                .process_audio(&input_buffer, &mut output_buffer);
+
             // Convert back to nih-plug buffer format
             for (sample_idx, mut channel_samples) in buffer.iter_samples().enumerate() {
                 let left = output_buffer[sample_idx * 2];
                 let right = output_buffer[sample_idx * 2 + 1];
-                
+
                 if let Some(left_channel) = channel_samples.get_mut(0) {
                     *left_channel = left;
                 }
@@ -826,14 +879,18 @@ impl LoopstationPlugin {
     /// Send MIDI output events
     fn send_midi_output(&mut self, context: &mut impl ProcessContext<Self>) {
         let output_data = self.midi_handler.get_output_data();
-        
+
         if !output_data.is_empty() {
             // Convert our MIDI data back to nih-plug events
             let mut i = 0;
             while i < output_data.len() {
                 if let Some(message) = MidiMessage::from_bytes(&output_data[i..]) {
                     match message {
-                        MidiMessage::ControlChange { channel, controller, value } => {
+                        MidiMessage::ControlChange {
+                            channel,
+                            controller,
+                            value,
+                        } => {
                             context.send_event(NoteEvent::MidiCC {
                                 timing: 0,
                                 channel: (channel - 1) as u8,
@@ -858,78 +915,79 @@ impl LoopstationPlugin {
                     i += 1;
                 }
             }
-            
+
             // Clear the output buffer after sending
             self.midi_handler.clear_output_buffer();
         }
     }
-    
+
     /// Send MIDI Program Change when memory slot changes
     pub fn send_memory_slot_change(&mut self, slot: u8) {
         if let Err(_) = self.midi_handler.send_program_change(slot) {
             // Handle error silently for now
         }
     }
-    
+
     /// Send MIDI CC for parameter changes
     pub fn send_parameter_cc(&mut self, controller: u8, value: f32) {
         let midi_value = (value * 127.0).clamp(0.0, 127.0) as u8;
-        if let Err(_) = self.midi_handler.send_control_change(controller, midi_value) {
+        if let Err(_) = self
+            .midi_handler
+            .send_control_change(controller, midi_value)
+        {
             // Handle error silently for now
         }
     }
-    
+
     /// Update project state with current loopstation state
     fn update_project_state(&mut self) {
         // Update tempo
         self.project_state.tempo = self.loopstation_core.tempo;
-        
+
         // In a real implementation, we would also update:
         // - Track audio data from loopstation core
         // - Effect settings from effect chains
         // - Other project parameters
-        
+
         // For now, just sync basic parameters
         self.project_state.tempo = self.params.tempo.value();
     }
-    
+
     /// Load project from memory slot (simplified implementation)
     pub fn load_memory_slot(&mut self, slot: u8) {
         // In a real implementation, this would load from persistent storage
         // For now, just create a placeholder project
         self.project_state.name = format!("Memory Slot {}", slot);
         self.project_state.version = 1;
-        
+
         // Send MIDI Program Change if enabled
         self.send_memory_slot_change(slot);
     }
-    
+
     /// Save current state to memory slot (simplified implementation)
     pub fn save_memory_slot(&mut self, slot: u8) {
         // Update project state with current settings
         self.update_project_state();
-        
+
         // In a real implementation, this would save to persistent storage
         // For now, just update the project name
         self.project_state.name = format!("Memory Slot {} - Saved", slot);
-        
+
         // Send MIDI Program Change if enabled
         self.send_memory_slot_change(slot);
     }
-    
+
     /// Serialize project state for DAW (simplified implementation)
     pub fn serialize_project_state(&self) -> Vec<u8> {
         // In a real implementation, this would use a proper serialization format
         // For now, just create a simple JSON-like string representation
         let state_json = format!(
             r#"{{"name":"{}","version":{},"tempo":{}}}"#,
-            self.project_state.name,
-            self.project_state.version,
-            self.project_state.tempo
+            self.project_state.name, self.project_state.version, self.project_state.tempo
         );
         state_json.into_bytes()
     }
-    
+
     /// Deserialize project state from DAW (simplified implementation)
     pub fn deserialize_project_state(&mut self, data: &[u8]) {
         // In a real implementation, this would use proper deserialization
@@ -939,14 +997,17 @@ impl LoopstationPlugin {
             if let Some(name_start) = state_str.find(r#""name":""#) {
                 let name_start = name_start + 8;
                 if let Some(name_end) = state_str[name_start..].find('"') {
-                    self.project_state.name = state_str[name_start..name_start + name_end].to_string();
+                    self.project_state.name =
+                        state_str[name_start..name_start + name_end].to_string();
                 }
             }
-            
+
             if let Some(tempo_start) = state_str.find(r#""tempo":"#) {
                 let tempo_start = tempo_start + 8;
                 if let Some(tempo_end) = state_str[tempo_start..].find('}') {
-                    if let Ok(tempo) = state_str[tempo_start..tempo_start + tempo_end].parse::<f32>() {
+                    if let Ok(tempo) =
+                        state_str[tempo_start..tempo_start + tempo_end].parse::<f32>()
+                    {
                         self.project_state.tempo = tempo;
                         self.loopstation_core.tempo = tempo;
                     }
@@ -963,7 +1024,11 @@ impl ClapPlugin for LoopstationPlugin {
     const CLAP_SUPPORT_URL: Option<&'static str> = None;
 
     // Don't forget to change these features
-    const CLAP_FEATURES: &'static [ClapFeature] = &[ClapFeature::AudioEffect, ClapFeature::Stereo, ClapFeature::MultiEffects];
+    const CLAP_FEATURES: &'static [ClapFeature] = &[
+        ClapFeature::AudioEffect,
+        ClapFeature::Stereo,
+        ClapFeature::MultiEffects,
+    ];
 }
 
 impl Vst3Plugin for LoopstationPlugin {

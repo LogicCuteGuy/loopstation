@@ -129,4 +129,34 @@ impl HardwareHal {
     pub fn get_footswitch_events(&mut self) -> Vec<(usize, bool), 4> {
         Vec::new()
     }
+
+    /// Process MIDI input (stub)
+    pub fn process_midi_input(&mut self, _timestamp: u32) -> Result<Vec<crate::midi::MidiMessage, 16>, HalError> {
+        Ok(Vec::new())
+    }
+
+    /// Send MIDI message (stub)
+    pub fn send_midi_message(&mut self, _message: crate::midi::MidiMessage) -> Result<(), HalError> {
+        Ok(())
+    }
+
+    /// Set MIDI clock sync (stub)
+    pub fn set_midi_clock_sync(&mut self, _enabled: bool) {
+        // Stub implementation
+    }
+
+    /// Get MIDI clock tempo (stub)
+    pub fn get_midi_clock_tempo(&self) -> f32 {
+        120.0
+    }
+
+    /// Check if MIDI clock is running (stub)
+    pub fn is_midi_clock_running(&self) -> bool {
+        false
+    }
+
+    /// Get MIDI stats (stub)
+    pub fn get_midi_stats(&self) -> (u32, u32, bool) {
+        (0, 0, true)
+    }
 }

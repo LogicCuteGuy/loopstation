@@ -107,6 +107,14 @@ pub enum ButtonFunction {
     MemoryInc,
     MemoryDec,
     
+    // Rhythm operations
+    RhythmStart,
+    RhythmStop,
+    RhythmToggle,
+    RhythmPatternNext,
+    RhythmPatternPrev,
+    RhythmPatternSelect(u8), // Pattern number 0-15
+    
     // System
     Panic,  // Stop all audio immediately
 }
@@ -1075,6 +1083,42 @@ impl ControlInterfaceHal {
     /// Get mutable control system reference
     pub fn control_system_mut(&mut self) -> &mut ControlSystem {
         self.control_interface.control_system_mut()
+    }
+
+    /// Set footswitch assignment for a specific footswitch
+    pub fn set_footswitch_assignment(&mut self, footswitch_index: usize, assignment: crate::settings::FootSwitchFunction) {
+        if footswitch_index < 2 {
+            // Convert settings FootSwitchFunction to controls FootswitchAssignment
+            let footswitch_assignment = match assignment {
+                crate::settings::FootSwitchFunction::RecPlay => Some(crate::storage::FootswitchAssignment::RecPlay(1)), // Default to track 1
+                crate::settings::FootSwitchFunction::MemoryInc => Some(crate::storage::FootswitchAssignment::MemoryInc),
+                crate::settings::FootSwitchFunction::MemoryDec => Some(crate::storage::FootswitchAssignment::MemoryDec),
+                crate::settings::FootSwitchFunction::UndoRedo => Some(crate::storage::FootswitchAssignment::UndoRedo),
+                crate::settings::FootSwitchFunction::TapTempo => Some(crate::storage::FootswitchAssignment::TapTempo),
+                crate::settings::FootSwitchFunction::AllStart => Some(crate::storage::FootswitchAssignment::AllStart),
+                crate::settings::FootSwitchFunction::AllStop => Some(crate::storage::FootswitchAssignment::AllStop),
+                crate::settings::FootSwitchFunction::Track1 => Some(crate::storage::FootswitchAssignment::RecPlay(1)),
+                crate::settings::FootSwitchFunction::Track2 => Some(crate::storage::FootswitchAssignment::RecPlay(2)),
+                crate::settings::FootSwitchFunction::Track3 => Some(crate::storage::FootswitchAssignment::RecPlay(3)),
+                crate::settings::FootSwitchFunction::Track4 => Some(crate::storage::FootswitchAssignment::RecPlay(4)),
+                crate::settings::FootSwitchFunction::Track5 => Some(crate::storage::FootswitchAssignment::RecPlay(5)),
+                crate::settings::FootSwitchFunction::Track6 => Some(crate::storage::FootswitchAssignment::RecPlay(6)),
+            };
+            
+            self.control_interface.control_system_mut().assignments.footswitch_assignments[footswitch_index] = footswitch_assignment;
+        }
+    }
+
+    /// Set CTL function assignment mode
+    pub fn set_ctl_func_assign_mode(&mut self, _mode: crate::settings::CtlFuncAssign) {
+        // This would configure how CTL functions are assigned
+        // Implementation depends on the specific control system design
+    }
+
+    /// Set expression pedal mode
+    pub fn set_exp_pedal_mode(&mut self, _mode: crate::settings::ExpPedalMode) {
+        // This would configure expression pedal behavior (continuous vs toggle)
+        // Implementation depends on the specific control system design
     }
 }
 

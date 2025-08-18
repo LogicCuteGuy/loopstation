@@ -12,11 +12,14 @@ mod display;
 mod network;
 mod communication;
 mod config;
+mod menu;
+mod input;
 
 use display::DisplayManager;
 use network::NetworkManager;
 use communication::CommunicationManager;
 use config::Config;
+use input::InputManager;
 
 fn main() -> Result<()> {
     // It is necessary to call this function once. Otherwise some patches to the runtime
@@ -44,9 +47,10 @@ fn main() -> Result<()> {
     )?;
 
     // Initialize managers
-    let display_manager = Arc::new(DisplayManager::new(peripherals.i2c0, peripherals.pins)?);
+    let display_manager = Arc::new(DisplayManager::new(peripherals.i2c0, peripherals.pins.clone())?);
     let communication_manager = Arc::new(CommunicationManager::new(peripherals.uart1)?);
     let network_manager = Arc::new(NetworkManager::new());
+    let input_manager = InputManager::new(peripherals.pins)?;
 
     // Connect to WiFi with auto-reconnection
     connect_wifi(&mut wifi, &config)?;
@@ -54,6 +58,10 @@ fn main() -> Result<()> {
     // Start STM32 communication status polling
     communication_manager.start_status_polling();
     info!("STM32 communication polling started");
+
+    // Start input polling thread
+    input_manager.start_input_polling(display_manager.clone(), communication_manager.clone());
+    info!("Input polling started");
 
     // Start display update thread
     let display_clone = display_manager.clone();
@@ -129,6 +137,13 @@ fn display_update_loop(
             // Log connection issues
             if !connected {
                 warn!("STM32 connection lost - {} errors, last heartbeat {:?} ago", errors, since_heartbeat);
+            }
+            
+            // Update menu system with current state
+            if display_manager.is_in_menu() {
+                if let Err(e) = display_manager.update_menu_from_system_state(&state) {
+                    error!("Menu update error: {:?}", e);
+                }
             }
             
             // Update display with current state

@@ -1,0 +1,32 @@
+[package]
+name = "loopstation_core_stm32"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+heapless = { version = "0.8", features = ["serde"] }
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+nb = "1.0"
+
+# STM32H7 HAL and embedded dependencies
+stm32h7xx-hal = { version = "0.16", features = ["stm32h743v", "rt", "usb_hs", "sdmmc", "ethernet"] }
+cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7"
+embedded-hal = "0.2"
+embedded-hal-nb = "1.0"
+
+# Audio processing
+micromath = "2.0"
+libm = "0.2"
+
+# Panic handler for embedded
+panic-halt = "0.2"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+
+[build-dependencies]
+# Build script dependencies for embedded compilation

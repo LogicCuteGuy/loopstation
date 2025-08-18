@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "loopstation_core",
-    "loopstation_plugin",
+    "loopstation_core_stm32",
+    "loopstation_plugin_pc",
     "xtask",
 ]

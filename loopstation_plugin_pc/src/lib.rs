@@ -364,7 +364,8 @@ impl LoopstationPlugin {
 
         // Update tempo
         let tempo = self.params.tempo.smoothed.next();
-        self.loopstation_core.tempo = tempo;
+        self.project_state.tempo = tempo; // Store in project state
+        self.loopstation_core.set_tempo(tempo); // Update core using the appropriate method
     }
 
     /// Update parameters for a specific track
@@ -387,7 +388,7 @@ impl LoopstationPlugin {
             .audio_engine_mut()
             .get_track_mut(track_id)
         {
-            track.set_pan(pan);
+            track.set_pan(pan, 0); // Using 0 as default timestamp
         }
 
         // Simple state logic - in a real implementation this would be more sophisticated
@@ -491,7 +492,7 @@ impl LoopstationPlugin {
                 self.handle_midi_program_change(program);
             }
             MidiMessage::Clock => {
-                self.midi_handler.process_clock();
+                self.midi_handler.process_clock(0); // Using 0 as default timestamp
             }
             _ => {} // Handle other message types as needed
         }
@@ -531,32 +532,32 @@ impl LoopstationPlugin {
             // Track pans - directly control loopstation core
             cc_mappings::TRACK_1_PAN => {
                 if let Some(track) = self.loopstation_core.audio_engine_mut().get_track_mut(1) {
-                    track.set_pan((normalized_value * 2.0) - 1.0);
+                    track.set_pan((normalized_value * 2.0) - 1.0, 0);
                 }
             }
             cc_mappings::TRACK_2_PAN => {
                 if let Some(track) = self.loopstation_core.audio_engine_mut().get_track_mut(2) {
-                    track.set_pan((normalized_value * 2.0) - 1.0);
+                    track.set_pan((normalized_value * 2.0) - 1.0, 0);
                 }
             }
             cc_mappings::TRACK_3_PAN => {
                 if let Some(track) = self.loopstation_core.audio_engine_mut().get_track_mut(3) {
-                    track.set_pan((normalized_value * 2.0) - 1.0);
+                    track.set_pan((normalized_value * 2.0) - 1.0, 0);
                 }
             }
             cc_mappings::TRACK_4_PAN => {
                 if let Some(track) = self.loopstation_core.audio_engine_mut().get_track_mut(4) {
-                    track.set_pan((normalized_value * 2.0) - 1.0);
+                    track.set_pan((normalized_value * 2.0) - 1.0, 0);
                 }
             }
             cc_mappings::TRACK_5_PAN => {
                 if let Some(track) = self.loopstation_core.audio_engine_mut().get_track_mut(5) {
-                    track.set_pan((normalized_value * 2.0) - 1.0);
+                    track.set_pan((normalized_value * 2.0) - 1.0, 0);
                 }
             }
             cc_mappings::TRACK_6_PAN => {
                 if let Some(track) = self.loopstation_core.audio_engine_mut().get_track_mut(6) {
-                    track.set_pan((normalized_value * 2.0) - 1.0);
+                    track.set_pan((normalized_value * 2.0) - 1.0, 0);
                 }
             }
 
@@ -569,7 +570,8 @@ impl LoopstationPlugin {
             // Tempo
             cc_mappings::TEMPO => {
                 let tempo = 60.0 + (normalized_value * 140.0); // 60-200 BPM range
-                self.loopstation_core.tempo = tempo;
+                self.project_state.tempo = tempo; // Store in project state
+                self.loopstation_core.set_tempo(tempo); // Update core using the appropriate method
             }
 
             // Expression pedals - store in project state for now
@@ -941,8 +943,8 @@ impl LoopstationPlugin {
 
     /// Update project state with current loopstation state
     fn update_project_state(&mut self) {
-        // Update tempo
-        self.project_state.tempo = self.loopstation_core.tempo;
+        // Update tempo - get current parameter value instead of accessing core directly
+        self.project_state.tempo = self.params.tempo.value();
 
         // In a real implementation, we would also update:
         // - Track audio data from loopstation core
@@ -950,7 +952,7 @@ impl LoopstationPlugin {
         // - Other project parameters
 
         // For now, just sync basic parameters
-        self.project_state.tempo = self.params.tempo.value();
+        // (already done above)
     }
 
     /// Load project from memory slot (simplified implementation)
@@ -1009,7 +1011,7 @@ impl LoopstationPlugin {
                         state_str[tempo_start..tempo_start + tempo_end].parse::<f32>()
                     {
                         self.project_state.tempo = tempo;
-                        self.loopstation_core.tempo = tempo;
+                        self.loopstation_core.set_tempo(tempo);
                     }
                 }
             }
